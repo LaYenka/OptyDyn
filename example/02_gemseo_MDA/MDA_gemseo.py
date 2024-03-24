@@ -2,9 +2,9 @@
 #
 from __future__ import annotations
 
-from gemseo.api import configure_logger
-from gemseo.api import create_discipline
-from gemseo.api import create_mda
+from gemseo import configure_logger
+from gemseo import create_discipline
+from gemseo import create_mda
 
 configure_logger()
 
@@ -52,4 +52,4 @@ disciplines = create_discipline(
 mda = create_mda("MDAGaussSeidel", disciplines)
 res = mda.execute()
 display_result(res, mda.name)
-mda.plot_residual_history(n_iterations=10, logscale=[1e-8, 10.0], save=False, show=True)
+mda.plot_residual_history(n_iterations=10, logscale=[1e-8, 10.0], save=True, show=True)
