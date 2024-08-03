@@ -16,22 +16,30 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from numbers import Number
 from typing import TYPE_CHECKING
 from typing import Any
 
 from numpy import array
-from numpy import atleast_2d
+from numpy import multiply
 from numpy import ndarray
+from numpy import where
 
-from gemseo.core.mdofunctions.mdo_function import ArrayType
 from gemseo.core.mdofunctions.mdo_function import MDOFunction
 from gemseo.core.mdofunctions.mdo_function import OutputType
 from gemseo.utils.compatibility.scipy import array_classes
+from gemseo.utils.compatibility.scipy import get_row
 from gemseo.utils.compatibility.scipy import sparse_classes
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from scipy.sparse import csr_matrix
+
+    from gemseo.algos.design_space import DesignSpace
+    from gemseo.typing import NumberArray
+    from gemseo.typing import SparseOrDenseRealArray
 
 
 class MDOLinearFunction(MDOFunction):
@@ -65,27 +73,22 @@ class MDOLinearFunction(MDOFunction):
 
     def __init__(
         self,
-        coefficients: ArrayType,
+        coefficients: SparseOrDenseRealArray,
         name: str,
-        f_type: str | None = None,
-        input_names: Sequence[str] | None = None,
+        f_type: MDOFunction.FunctionType = MDOFunction.FunctionType.NONE,
+        input_names: Sequence[str] = (),
         value_at_zero: OutputType = 0.0,
-        output_names: Sequence[str] | None = None,
+        output_names: Sequence[str] = (),
         expr: str | None = None,
     ) -> None:
         """
         Args:
-            coefficients: The coefficients :math:`A` of the linear function.
-            name: The name of the linear function.
-            f_type: The type of the linear function among
-                :attr:`.MDOFunction.FunctionType`.
-                If ``None``, the linear function will have no type.
-            input_names: The names of the inputs of the linear function.
-                If ``None``, the inputs of the linear function will have no names.
+            coefficients: The coefficient matrix :math:`A` of the linear function.
             value_at_zero: The value :math:`b` of the linear function output at zero.
-            output_names: The names of the outputs of the function.
-                If ``None``, the outputs of the function will have no names.
-            expr: The expression of the linear function.
+            expr: The expression of the function, if any.
+                If ``None``,
+                create an expression
+                from the coefficients and the value at zero.
         """  # noqa: D205, D212, D415
         # Format the passed coefficients and value at zero
         if isinstance(coefficients, sparse_classes):
@@ -118,7 +121,7 @@ class MDOLinearFunction(MDOFunction):
             output_names=output_names,
         )
 
-    def _func_to_wrap(self, x_vect: ArrayType) -> OutputType:
+    def _func_to_wrap(self, x_vect: NumberArray) -> OutputType:
         """Return the linear combination with an offset.
 
         :math:`sum_{i=1}^n a_i * x_i + b`
@@ -131,7 +134,7 @@ class MDOLinearFunction(MDOFunction):
             value = value[0]
         return value
 
-    def _jac_to_wrap(self, _: Any) -> ArrayType:
+    def _jac_to_wrap(self, _: Any) -> NumberArray:
         """Set and return the coefficients.
 
         If the function is scalar, the gradient of the function is returned as a
@@ -146,22 +149,16 @@ class MDOLinearFunction(MDOFunction):
         return self._coefficients
 
     @property
-    def coefficients(self) -> ArrayType:
-        """The coefficients of the linear function.
+    def coefficients(self) -> NumberArray:
+        """The coefficient matrix of the linear function.
 
         This is the matrix :math:`A` in the expression :math:`y=Ax+b`.
-
-        Raises:
-            ValueError: If the coefficients are not passed
-                as a 1-dimensional or 2-dimensional ndarray.
         """
         return self._coefficients
 
     @coefficients.setter
-    def coefficients(self, coefficients: Number | ArrayType) -> None:
-        if isinstance(coefficients, Number):
-            self._coefficients = atleast_2d(coefficients)
-        elif isinstance(coefficients, array_classes) and coefficients.ndim == 2:
+    def coefficients(self, coefficients: SparseOrDenseRealArray) -> None:
+        if isinstance(coefficients, array_classes) and coefficients.ndim == 2:
             self._coefficients = coefficients
         elif isinstance(coefficients, array_classes) and coefficients.ndim == 1:
             self._coefficients = coefficients.reshape((1, -1))
@@ -173,7 +170,7 @@ class MDOLinearFunction(MDOFunction):
             raise ValueError(msg)
 
     @property
-    def value_at_zero(self) -> ArrayType:
+    def value_at_zero(self) -> NumberArray:
         """The value of the function at zero.
 
         This is the vector :math:`b` in the expression :math:`y=Ax+b`.
@@ -210,6 +207,7 @@ class MDOLinearFunction(MDOFunction):
         if isinstance(self._coefficients, ndarray):
             iterable = enumerate(self._coefficients[0, :])
         else:
+            self._coefficients: csr_matrix
             iterable = zip(self._coefficients.indices, self._coefficients.data)
 
         for index, coefficient in iterable:
@@ -262,7 +260,8 @@ class MDOLinearFunction(MDOFunction):
                 if isinstance(self._coefficients, ndarray):
                     ith_row = self._coefficients[i, :]
                 else:
-                    ith_row = self._coefficients.getrow(i).toarray().flatten()
+                    self._coefficients: csr_matrix
+                    ith_row = get_row(self._coefficients, i).toarray().flatten()
 
                 coefficients = (
                     self.COEFF_FORMAT_ND.format(coefficient) for coefficient in ith_row
@@ -303,7 +302,7 @@ class MDOLinearFunction(MDOFunction):
         )
 
     def restrict(
-        self, frozen_indexes: ndarray[int], frozen_values: ArrayType
+        self, frozen_indexes: ndarray[int], frozen_values: NumberArray
     ) -> MDOLinearFunction:
         """Build a restriction of the linear function.
 
@@ -335,3 +334,38 @@ class MDOLinearFunction(MDOFunction):
             value_at_zero=new_value_at_zero,
             expr=self.__initial_expression,
         )
+
+    def normalize(self, input_space: DesignSpace) -> MDOLinearFunction:
+        """Create a linear function using a scaled input vector.
+
+        Args:
+            input_space: The input space.
+
+        Returns:
+            The scaled linear function.
+        """
+        # Get normalization factors and shift
+        norm_policies = input_space.dict_to_array(input_space.normalize)
+        norm_factors = where(
+            norm_policies,
+            input_space.get_upper_bounds() - input_space.get_lower_bounds(),
+            1.0,
+        )
+        shift = where(norm_policies, input_space.get_lower_bounds(), 0.0)
+
+        if isinstance(self.coefficients, sparse_classes):
+            coefficients = deepcopy(self.coefficients)
+            coefficients.data *= norm_factors[coefficients.indices]
+        else:
+            coefficients = multiply(self.coefficients, norm_factors)
+
+        value_at_zero = self.evaluate(shift)
+        function = MDOLinearFunction(
+            coefficients,
+            self.name,
+            self.f_type,
+            self.input_names,
+            value_at_zero,
+        )
+        function.expects_normalized_inputs = True
+        return function

@@ -23,13 +23,11 @@
 from __future__ import annotations
 
 import logging
-import pickle
 from collections.abc import Iterable
 from collections.abc import Sequence
 from collections.abc import Sized
-from multiprocessing import Value
+from numbers import Complex
 from numbers import Number
-from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Callable
@@ -42,7 +40,6 @@ from numpy import ndarray
 from numpy import ufunc
 from numpy import where
 from numpy.linalg import norm
-from numpy.typing import NDArray
 from strenum import StrEnum
 
 from gemseo.algos.design_space import DesignSpace
@@ -51,12 +48,10 @@ from gemseo.core.mdofunctions._operations import _MultiplicationFunctionMaker
 from gemseo.core.mdofunctions._operations import _OperationFunctionMaker
 from gemseo.core.mdofunctions.not_implementable_callable import NotImplementedCallable
 from gemseo.core.mdofunctions.set_pt_from_database import SetPtFromDatabase
-from gemseo.core.serializable import Serializable
+from gemseo.typing import NumberArray
 from gemseo.utils.compatibility.scipy import sparse_classes
 from gemseo.utils.derivatives.approximation_modes import ApproximationMode
-from gemseo.utils.derivatives.gradient_approximator_factory import (
-    GradientApproximatorFactory,
-)
+from gemseo.utils.derivatives.factory import GradientApproximatorFactory
 from gemseo.utils.enumeration import merge_enums
 from gemseo.utils.string_tools import pretty_str
 
@@ -65,15 +60,13 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
-ArrayType = NDArray[Number]
-OperandType = Union[ArrayType, Number]
-OperatorType = Union[Callable[[OperandType, OperandType], OperandType], ufunc]
-OutputType = Union[ArrayType, Number]
-WrappedFunctionType = Callable[[ArrayType], OutputType]
-WrappedJacobianType = Callable[[ArrayType], ArrayType]
+OutputType = Union[NumberArray, Complex]
+OperatorType = Union[Callable[[OutputType, OutputType], OutputType], ufunc]
+WrappedFunctionType = Callable[[NumberArray], OutputType]
+WrappedJacobianType = Callable[[NumberArray], NumberArray]
 
 
-class MDOFunction(Serializable):
+class MDOFunction:
     """The standard definition of an array-based function with algebraic operations.
 
     :class:`.MDOFunction` is the key class
@@ -192,8 +185,14 @@ class MDOFunction(Serializable):
 
     # N.B. the space character ensures same length whatever the sign of the coefficient
 
-    activate_counters: ClassVar[bool] = True
-    """Whether to count the number of function evaluations."""
+    expr: str
+    """The expression of the function, e.g. `"2*x"`."""
+
+    f_type: FunctionType
+    """The type of the function."""
+
+    force_real: bool
+    """Whether to cast the results to real value."""
 
     has_default_name: bool
     """Whether the name has been set with a default value."""
@@ -204,17 +203,17 @@ class MDOFunction(Serializable):
     ``None`` if it has not yet been evaluated.
     """
 
-    force_real: bool
-    """Whether to cast the results to real value."""
+    name: str
+    """The name of the function."""
+
+    original: MDOFunction
+    """The function before preprocessing by the :class:`.OptimizationProblem."""
 
     special_repr: str
     """The string representation of the function overloading its default string ones."""
 
-    _n_calls: Value
-    """The number of times that the function has been evaluated."""
-
-    _f_type: FunctionType
-    """The type of the function."""
+    _dim: int
+    """The dimension of the output space of the function."""
 
     _func: WrappedFunctionType
     """The function to be evaluated from a given input vector."""
@@ -222,17 +221,8 @@ class MDOFunction(Serializable):
     _jac: WrappedJacobianType
     """The Jacobian function to be evaluated from a given input vector."""
 
-    _name: str
-    """The name of the function."""
-
     _input_names: list[str]
     """The names of the inputs of the function."""
-
-    _expr: str
-    """The expression of the function, e.g. `"2*x"`."""
-
-    _dim: int
-    """The dimension of the output space of the function."""
 
     _output_names: list[str]
     """The names of the outputs of the function."""
@@ -255,13 +245,13 @@ class MDOFunction(Serializable):
         f_type: FunctionType = FunctionType.NONE,
         jac: WrappedJacobianType | None = None,
         expr: str = "",
-        input_names: Iterable[str] | None = None,
+        input_names: Iterable[str] = (),
         dim: int = 0,
-        output_names: Iterable[str] | None = None,
+        output_names: Iterable[str] = (),
         force_real: bool = False,
         special_repr: str = "",
         original_name: str = "",
-        expects_normalized_inputs: bool = False,
+        with_normalized_inputs: bool = False,
     ) -> None:
         """
         Args:
@@ -273,36 +263,24 @@ class MDOFunction(Serializable):
                 If ``None``, the function will not have an original Jacobian function.
             expr: The expression of the function, e.g. `"2*x"`, if any.
             input_names: The names of the inputs of the function.
-                If ``None``, the inputs of the function will have no names.
+                If empty, the inputs of the function will have no names.
             dim: The dimension of the output space of the function.
                 If 0, the dimension of the output space of the function
                 will be deduced from the evaluation of the function.
             output_names: The names of the outputs of the function.
-                If ``None``, the outputs of the function will have no names.
+                If empty, the outputs of the function will have no names.
             force_real: Whether to cast the output values to real.
             special_repr: The string representation of the function.
                 If empty, use :meth:`.default_repr`.
             original_name: The original name of the function.
                 If empty, use the same name than the ``name`` input.
-            expects_normalized_inputs: Whether the function expects normalized inputs.
+            with_normalized_inputs: Whether the function expects normalized inputs.
         """  # noqa: D205, D212, D415
         super().__init__()
-
-        # Initialize attributes
-        self.__original_name = original_name if original_name else name
-        self._f_type = ""
-        self._func = NotImplementedCallable()
-        self._jac = NotImplementedCallable()
-        self._name = ""
-        self._input_names = []
-        self._expr = ""
-        self._dim = 0
-        self._output_names = []
-        self._init_shared_memory_attrs()
-        # Use setters to check values
+        self.__original_name = original_name or name
+        self.name = name
         self.func = func
         self.jac = jac
-        self.name = name
         self.f_type = f_type
         self.expr = expr
         self.input_names = input_names
@@ -312,7 +290,8 @@ class MDOFunction(Serializable):
         self.force_real = force_real
         self.special_repr = special_repr or ""
         self.has_default_name = bool(self.name)
-        self.__expects_normalized_inputs = expects_normalized_inputs
+        self.__expects_normalized_inputs = with_normalized_inputs
+        self.original = self
 
     @property
     def original_name(self) -> str:
@@ -320,130 +299,39 @@ class MDOFunction(Serializable):
         return self.__original_name
 
     @property
-    def n_calls(self) -> int:
-        """The number of times the function has been evaluated.
-
-        This count is both multiprocess- and multithread-safe, thanks to the locking
-        process used by :meth:`.MDOFunction.evaluate`.
-        """
-        if self.activate_counters:
-            return self._n_calls.value
-        return None
-
-    @n_calls.setter
-    def n_calls(
-        self,
-        value: int,
-    ) -> None:
-        if not self.activate_counters:
-            msg = "The function counters are disabled."
-            raise RuntimeError(msg)
-
-        with self._n_calls.get_lock():
-            self._n_calls.value = value
-
-    @property
     def func(self) -> WrappedFunctionType:
-        """The function to be evaluated from a given input vector."""
-        return self.__counted_f
-
-    def __counted_f(self, x_vect: ArrayType) -> OutputType:
-        """Evaluate the function and store the result in :attr:`.MDOFunction.last_eval`.
-
-        This evaluation is both multiprocess- and multithread-safe,
-        thanks to a locking process.
-
-        Args:
-            x_vect: The value of the inputs of the function.
-
-        Returns:
-            The value of the outputs of the function.
-        """
-        if self.activate_counters:
-            with self._n_calls.get_lock():
-                self._n_calls.value += 1
-
-        self.last_eval = self._func(x_vect)
-        return self.last_eval
+        """The wrapped function."""
+        return self._func
 
     @func.setter
-    def func(self, f_pointer: WrappedFunctionType) -> None:
-        if self.activate_counters:
-            self._n_calls.value = 0
-        self._func = f_pointer or NotImplementedCallable()
-
-    def to_pickle(self, file_path: str | Path) -> None:
-        """Serialize the function and store it in a file.
-
-        Args:
-            file_path: The path to the file to store the function.
-        """
-        with Path(file_path).open("wb") as outfobj:
-            pickler = pickle.Pickler(outfobj, protocol=2)
-            pickler.dump(self)
-
-    @staticmethod
-    def from_pickle(file_path: str | Path) -> MDOFunction:
-        """Deserialize a function from a file.
-
-        Args:
-            file_path: The path to the file containing the function.
-
-        Returns:
-            The function instance.
-        """
-        with Path(file_path).open("rb") as file_:
-            return pickle.Unpickler(file_).load()
-
-    def _init_shared_memory_attrs(self) -> None:
-        """Initialize the shared attributes in multiprocessing."""
-        self._n_calls = Value("i", 0)
-
-    def __call__(self, x_vect: ArrayType) -> OutputType:
-        """Evaluate the function.
-
-        This method can cast the result to real value
-        according to the value of the attribute :attr:`.MDOFunction.force_real`.
-
-        Args:
-            x_vect: The value of the inputs of the function.
-
-        Returns:
-            The value of the outputs of the function.
-        """
-        return self.evaluate(x_vect)
-
-    def evaluate(self, x_vect: ArrayType) -> OutputType:
-        """Evaluate the function and store the dimension of the output space.
-
-        Args:
-            x_vect: The value of the inputs of the function.
-
-        Returns:
-            The value of the output of the function.
-        """
-        if self.activate_counters:
-            val = self.__counted_f(x_vect)
+    def func(self, f_pointer: WrappedFunctionType | None) -> None:
+        if f_pointer is None:
+            self._func = NotImplementedCallable(self.name, "value")
         else:
-            # we duplicate the logic here of __counted_f on purpose for performance
-            val = self._func(x_vect)
-            self.last_eval = val
+            self._func = f_pointer
+
+    def evaluate(self, x_vect: NumberArray) -> OutputType:
+        """Evaluate the function and store the output value in :attr:`.last_eval`.
+
+        When the output dimension :attr:`.dim` is not defined,
+        it is inferred on the first evaluation.
+
+        Args:
+            x_vect: The input value of the function.
+
+        Returns:
+            Either the raw output value
+            or its real part when :attr:`.force_real` is `True`.
+        """
+        output_value = self.last_eval = self._func(x_vect)
 
         if self.force_real:
-            val = val.real
+            output_value = output_value.real
 
         if not self.dim:
-            self.dim = val.size if isinstance(val, ndarray) else 1
-        return val
+            self.dim = output_value.size if isinstance(output_value, ndarray) else 1
 
-    @property
-    def name(self) -> str:
-        """The name of the function."""
-        return self._name
-
-    @name.setter
-    def name(self, name: str | None) -> None:
-        self._name = name or ""
+        return output_value
 
     @property
     def jac(self) -> WrappedJacobianType:
@@ -452,7 +340,7 @@ class MDOFunction(Serializable):
 
     @jac.setter
     def jac(self, jac: WrappedJacobianType | None) -> None:
-        self._jac = jac or NotImplementedCallable()
+        self._jac = jac or NotImplementedCallable(self.name, "Jacobian")
 
     @property
     def input_names(self) -> list[str]:
@@ -463,29 +351,8 @@ class MDOFunction(Serializable):
         return self._input_names
 
     @input_names.setter
-    def input_names(self, input_names: Iterable[str] | None) -> None:
-        if input_names is None:
-            self._input_names = []
-        else:
-            self._input_names = list(input_names)
-
-    @property
-    def expr(self) -> str:
-        """The expression of the function, e.g. `"2*x"`."""
-        return self._expr
-
-    @expr.setter
-    def expr(self, expr: str) -> None:
-        self._expr = expr or ""
-
-    @property
-    def dim(self) -> int:
-        """The dimension of the output space of the function."""
-        return self._dim
-
-    @dim.setter
-    def dim(self, dim: int | None) -> None:
-        self._dim = dim or 0
+    def input_names(self, input_names: Iterable[str]) -> None:
+        self._input_names = list(input_names)
 
     @property
     def output_names(self) -> list[str]:
@@ -497,15 +364,12 @@ class MDOFunction(Serializable):
 
     @output_names.setter
     def output_names(self, output_names: Iterable[str]) -> None:
-        if output_names is None:
-            self._output_names = []
-        else:
-            self._output_names = list(output_names)
+        self._output_names = list(output_names)
 
     def is_constraint(self) -> bool:
         """Check if the function is a constraint.
 
-        The type of a constraint function is either 'eq' or 'ineq'.
+        The constraint type is either ``"eq"`` or "``ineq"``.
 
         Returns:
             Whether the function is a constraint.
@@ -551,11 +415,7 @@ class MDOFunction(Serializable):
 
     @property
     def has_jac(self) -> bool:
-        """Check if the function has an implemented Jacobian function.
-
-        Returns:
-            Whether the function has an implemented Jacobian function.
-        """
+        """Whether the function has an implemented Jacobian function."""
         return self.jac is not None and not isinstance(
             self._jac, NotImplementedCallable
         )
@@ -588,7 +448,7 @@ class MDOFunction(Serializable):
         """
         return _AdditionFunctionMaker(MDOFunction, self, other, inverse=True).function
 
-    def _min_pt(self, x_vect: ArrayType) -> ArrayType:
+    def _min_pt(self, x_vect: NumberArray) -> NumberArray:
         """Evaluate the function and return its opposite value.
 
         Args:
@@ -597,9 +457,9 @@ class MDOFunction(Serializable):
         Returns:
             The opposite of the value of the outputs of the function.
         """
-        return -self(x_vect)
+        return -self.evaluate(x_vect)
 
-    def _min_jac(self, x_vect: ArrayType) -> ArrayType:
+    def _min_jac(self, x_vect: NumberArray) -> NumberArray:
         """Evaluate the Jacobian function and return its opposite value.
 
         Args:
@@ -705,7 +565,7 @@ class MDOFunction(Serializable):
 
     def check_grad(
         self,
-        x_vect: ArrayType,
+        x_vect: NumberArray,
         approximation_mode: ApproximationMode = ApproximationMode.FINITE_DIFFERENCES,
         step: float = 1e-6,
         error_max: float = 1e-8,
@@ -726,7 +586,7 @@ class MDOFunction(Serializable):
                 or if the analytical gradients are wrong.
         """
         gradient_approximator = GradientApproximatorFactory().create(
-            approximation_mode, self, step=step
+            approximation_mode, self.evaluate, step=step
         )
 
         approximation = gradient_approximator.f_gradient(x_vect).real
@@ -756,7 +616,7 @@ class MDOFunction(Serializable):
             raise ValueError(msg)
 
     @staticmethod
-    def rel_err(a_vect: ArrayType, b_vect: ArrayType, error_max: float) -> float:
+    def rel_err(a_vect: NumberArray, b_vect: NumberArray, error_max: float) -> float:
         """Compute the 2-norm of the difference between two vectors.
 
         Normalize it with the 2-norm of the reference vector
@@ -776,7 +636,7 @@ class MDOFunction(Serializable):
         return norm(a_vect - b_vect)
 
     @staticmethod
-    def filt_0(arr: ArrayType, floor_value: float = 1e-6) -> ArrayType:
+    def filt_0(arr: NumberArray, floor_value: float = 1e-6) -> NumberArray:
         """Set the non-significant components of a vector to zero.
 
         The component of a vector is non-significant
@@ -868,7 +728,7 @@ class MDOFunction(Serializable):
 
     @classmethod
     def generate_input_names(
-        cls, input_dim: int, input_names: Sequence[str] | None = None
+        cls, input_dim: int, input_names: Sequence[str] = ()
     ) -> Sequence[str]:
         """Generate the names of the inputs of the function.
 
@@ -888,7 +748,6 @@ class MDOFunction(Serializable):
         Returns:
             The names of the inputs of the function.
         """
-        input_names = input_names or []
         n_input_names = len(input_names)
         if n_input_names == input_dim:
             return input_names
@@ -915,6 +774,10 @@ class MDOFunction(Serializable):
     def expects_normalized_inputs(self) -> bool:
         """Whether the function expects normalized inputs."""
         return self.__expects_normalized_inputs
+
+    @expects_normalized_inputs.setter
+    def expects_normalized_inputs(self, value: bool) -> None:
+        self.__expects_normalized_inputs = value
 
     def get_indexed_name(self, index: int) -> str:
         """Return the name of function component.

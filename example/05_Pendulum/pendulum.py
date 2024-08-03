@@ -2,8 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.integrate import odeint
 
-from src.ODE_int import *
-from src.system import pendulum
+from ODE_int import *
+from system_pendulum import pendulum
 
 
 N = 100         # in how much sub pieces we should break a 1sec interval
@@ -19,8 +19,7 @@ theta_0 = [0.2*np.pi / 2,0.1]      # initial angle ,theta_dot]
 
 # time plot
 t = np.linspace(0,T,N,dtype=float)
-
-
+# ode_int python
 theta_odeint = odeint(pendulum,theta_0,t,args = (k,g,L,m))
 
 # setup tuple with argument list

@@ -27,12 +27,11 @@ from gemseo.core.discipline import MDODiscipline
 from gemseo.mda.base_mda_solver import BaseMDASolver
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
     from collections.abc import Sequence
-    from typing import Any
 
     from gemseo.core.coupling_structure import DependencyGraph
     from gemseo.core.coupling_structure import MDOCouplingStructure
+    from gemseo.typing import StrKeyMapping
 
 
 class MDAGaussSeidel(BaseMDASolver):
@@ -78,33 +77,20 @@ class MDAGaussSeidel(BaseMDASolver):
     def __init__(  # noqa: D107
         self,
         disciplines: Sequence[MDODiscipline],
-        name: str | None = None,
+        name: str = "",
         max_mda_iter: int = 10,
         grammar_type: MDODiscipline.GrammarType = MDODiscipline.GrammarType.JSON,
         tolerance: float = 1e-6,
         linear_solver_tolerance: float = 1e-12,
         warm_start: bool = False,
         use_lu_fact: bool = False,
-        over_relax_factor: float | None = None,  # TODO: API: Remove the argument.
         coupling_structure: MDOCouplingStructure | None = None,
         log_convergence: bool = False,
         linear_solver: str = "DEFAULT",
-        linear_solver_options: Mapping[str, Any] | None = None,
+        linear_solver_options: StrKeyMapping | None = None,
         acceleration_method: AccelerationMethod = AccelerationMethod.NONE,
         over_relaxation_factor: float = 1.0,
     ) -> None:
-        """
-        Args:
-            over_relax_factor: Deprecated, please consider using
-                :attr:`MDA.over_relaxation_factor` instead.
-                The relaxation coefficient, used to make the method more robust, if
-                ``0<over_relax_factor<1`` or faster if ``1<over_relax_factor<=2``. If
-                ``over_relax_factor =1.``, it is deactivated.
-        """  # noqa:D205 D212 D415
-        # TODO: API: Remove the old name and attributes for over-relaxation factor.
-        if over_relax_factor is not None:
-            over_relaxation_factor = over_relax_factor
-
         super().__init__(
             disciplines,
             max_mda_iter=max_mda_iter,
@@ -121,25 +107,16 @@ class MDAGaussSeidel(BaseMDASolver):
             acceleration_method=acceleration_method,
             over_relaxation_factor=over_relaxation_factor,
         )
-
-        self._compute_input_couplings()
+        self._compute_input_coupling_names()
         self._set_resolved_variables(self.strong_couplings)
-
-    # TODO: API: Remove the property and its setter.
-    @property
-    def over_relax_factor(self) -> float:
-        """The over-relaxation factor."""
-        return self.over_relaxation_factor
-
-    @over_relax_factor.setter
-    def over_relax_factor(self, over_relaxation_factor: float) -> None:
-        self.over_relaxation_factor = over_relaxation_factor
+        if max_mda_iter == 0:
+            del self.output_grammar[self.RESIDUALS_NORM]
 
     def _initialize_grammars(self) -> None:
         """Define the input and output grammars from the disciplines' ones."""
         for discipline in self.disciplines:
             self.input_grammar.update(
-                discipline.input_grammar, exclude_names=self.output_grammar.keys()
+                discipline.input_grammar, excluded_names=self.output_grammar.keys()
             )
             self.output_grammar.update(discipline.output_grammar)
 
@@ -152,6 +129,8 @@ class MDAGaussSeidel(BaseMDASolver):
     def _run(self) -> None:
         super()._run()
         self.execute_all_disciplines()
+        if self.max_mda_iter == 0:
+            return
 
         while True:
             input_data = self.local_data.copy()

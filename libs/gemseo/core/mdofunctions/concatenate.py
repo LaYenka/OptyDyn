@@ -23,25 +23,26 @@ from numpy import atleast_2d
 from numpy import concatenate
 from numpy import vstack
 
-from gemseo.core.mdofunctions.mdo_function import ArrayType
 from gemseo.core.mdofunctions.mdo_function import MDOFunction
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from gemseo.typing import NumberArray
 
 
 class Concatenate(MDOFunction):
     """Wrap the concatenation of a set of functions."""
 
     def __init__(
-        self, functions: Iterable[MDOFunction], name: str, f_type: str | None = None
+        self,
+        functions: Iterable[MDOFunction],
+        name: str,
+        f_type: MDOFunction.FunctionType = MDOFunction.FunctionType.NONE,
     ) -> None:
         """
         Args:
             functions: The functions to be concatenated.
-            name: The name of the concatenation function.
-            f_type: The type of the concatenation function.
-                If ``None``, the function will have no type.
         """  # noqa: D205, D212, D415
         self.__functions = functions
         func_output_names = [func.output_names for func in self.__functions]
@@ -63,7 +64,7 @@ class Concatenate(MDOFunction):
             output_names=output_names,
         )
 
-    def _func_to_wrap(self, x_vect: ArrayType) -> ArrayType:
+    def _func_to_wrap(self, x_vect: NumberArray) -> NumberArray:
         """Concatenate the values of the outputs of the functions.
 
         Args:
@@ -72,9 +73,11 @@ class Concatenate(MDOFunction):
         Returns:
             The concatenation of the values of the outputs of the functions.
         """
-        return concatenate([atleast_1d(func(x_vect)) for func in self.__functions])
+        return concatenate([
+            atleast_1d(func.evaluate(x_vect)) for func in self.__functions
+        ])
 
-    def _jac_to_wrap(self, x_vect: ArrayType) -> ArrayType:
+    def _jac_to_wrap(self, x_vect: NumberArray) -> NumberArray:
         """Concatenate the outputs of the Jacobian functions.
 
         Args:

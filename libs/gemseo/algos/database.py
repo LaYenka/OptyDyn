@@ -37,15 +37,25 @@ from typing import Union
 from xml.etree.ElementTree import parse as parse_element
 
 from numpy import array
+from numpy import array_equal
 from numpy import atleast_1d
 from numpy import atleast_2d
+from numpy import dtype
 from numpy import hstack
+from numpy import insert
+from numpy import integer
+from numpy import issubdtype
+from numpy import nan
 from numpy import ndarray
 from numpy.linalg import norm
+from pandas import MultiIndex
 
 from gemseo.algos._hdf_database import HDFDatabase
 from gemseo.algos.hashable_ndarray import HashableNdarray
+from gemseo.datasets.dataset import Dataset
+from gemseo.datasets.optimization_dataset import OptimizationDataset
 from gemseo.utils.ggobi_export import save_data_arrays_to_xml
+from gemseo.utils.string_tools import convert_strings_to_iterable
 from gemseo.utils.string_tools import pretty_repr
 from gemseo.utils.string_tools import repr_variable
 
@@ -55,14 +65,20 @@ if TYPE_CHECKING:
 
     from numpy.typing import NDArray
 
+    from gemseo.algos.design_space import DesignSpace
+    from gemseo.typing import RealArray
 
-# Type of the values associated to the keys (values of input variables) in the database
 DatabaseKeyType = Union[ndarray, HashableNdarray]
+"""The type of a :class:`.Database` key."""
+
 FunctionOutputValueType = Union[float, ndarray, list[int]]
+"""The type of a function output value stored in a :class:`.Database`."""
+
 DatabaseValueType = Mapping[str, FunctionOutputValueType]
-ReturnedHdfMissingOutputType = tuple[
-    Mapping[str, FunctionOutputValueType], Union[None, Mapping[str, int]]
-]
+"""The type of a :class:`.Database` value."""
+
+ListenerType = Callable[[DatabaseKeyType], None]
+"""The type of a listener attached to an :class:`.Database`."""
 
 
 class Database(Mapping):
@@ -131,10 +147,10 @@ class Database(Mapping):
     __data: dict[HashableNdarray, DatabaseValueType]
     """The input values bound to the output values."""
 
-    __store_listeners: list[Callable]
+    __store_listeners: list[ListenerType]
     """The functions to be called when an item is stored to the database."""
 
-    __new_iter_listeners: list[Callable]
+    __new_iter_listeners: list[ListenerType]
     """The functions to be called when a new iteration is stored to the database."""
 
     __hdf_database: HDFDatabase
@@ -304,6 +320,9 @@ class Database(Mapping):
 
         Returns:
             The history of the function output, and possibly the input history.
+
+        Raises:
+            KeyError: When the database contains no output value for this function.
         """
         output_history = []
         input_history = []
@@ -316,6 +335,10 @@ class Database(Mapping):
 
                 if with_x_vect:
                     input_history.append(x.wrapped_array)
+
+        if not output_history:
+            msg = f"The database {self.name!r} contains no value of {function_name!r}."
+            raise KeyError(msg)
 
         try:
             output_history = array(output_history)
@@ -458,7 +481,7 @@ class Database(Mapping):
 
     def store(
         self,
-        x_vect: ndarray,
+        x_vect: DatabaseKeyType,
         outputs: DatabaseValueType,
     ) -> None:
         """Store the output values associated to the input values.
@@ -488,39 +511,90 @@ class Database(Mapping):
         if self.__new_iter_listeners and outputs and current_outputs_is_empty:
             self.notify_new_iter_listeners(x_vect)
 
-    def add_store_listener(self, function: Callable) -> None:
+    def add_store_listener(self, function: ListenerType) -> bool:
         """Add a function to be called when an item is stored to the database.
 
         Args:
             function: The function to be called.
 
-        Raises:
-            TypeError: If the argument is not a callable.
+        Returns:
+            Whether the function has been added;
+            otherwise, it was already attached to the database.
         """
-        if not callable(function):
-            msg = "Listener function is not callable"
-            raise TypeError(msg)
-        self.__store_listeners.append(function)
+        return self.__add_listener(function, self.__store_listeners)
 
-    def add_new_iter_listener(self, function: Callable) -> None:
+    def add_new_iter_listener(self, function: ListenerType) -> bool:
         """Add a function to be called when a new iteration is stored to the database.
 
         Args:
             function: The function to be called, it must have one argument that is
                 the current input value.
 
-        Raises:
-            TypeError: If the argument is not a callable.
+        Returns:
+            Whether the function has been added;
+            otherwise, it was already attached to the database.
         """
-        if not callable(function):
-            msg = "Listener function is not callable."
-            raise TypeError(msg)
-        self.__new_iter_listeners.append(function)
+        return self.__add_listener(function, self.__new_iter_listeners)
 
-    def clear_listeners(self) -> None:
-        """Clear all the listeners."""
-        self.__store_listeners = []
-        self.__new_iter_listeners = []
+    @staticmethod
+    def __add_listener(function: ListenerType, listeners: list[ListenerType]) -> bool:
+        """Add a function as listener.
+
+        Args:
+            function: The function.
+            listeners: The listeners to which to add the function.
+
+        Returns:
+            Whether the function has been added;
+            otherwise, it was already attached to the database.
+        """
+        if function in listeners:
+            return False
+
+        listeners.append(function)
+        return True
+
+    def clear_listeners(
+        self,
+        new_iter_listeners: Iterable[ListenerType] | None = (),
+        store_listeners: Iterable[ListenerType] | None = (),
+    ) -> tuple[Iterable[ListenerType], Iterable[ListenerType]]:
+        """Clear all the listeners.
+
+        Args:
+            new_iter_listeners: The functions to be removed
+                that were notified of a new iteration.
+                If empty, remove all such functions.
+                If ``None``, keep all these functions.
+            store_listeners: The functions to be removed
+                that were notified of a new entry in the database.
+                If empty, remove all such functions.
+                If ``None``, keep all these functions.
+
+        Returns:
+            The listeners that were notified of a new iteration
+            and the listeners that were notified of a new entry in the database.
+        """
+        if store_listeners is None:
+            store_listeners = set()
+        elif store_listeners:
+            for listener in store_listeners:
+                self.__store_listeners.remove(listener)
+        else:
+            store_listeners = self.__store_listeners
+            self.__store_listeners = []
+
+        if new_iter_listeners is None:
+            return set(), set(store_listeners)
+
+        if new_iter_listeners:
+            for listener in new_iter_listeners:
+                self.__new_iter_listeners.remove(listener)
+        else:
+            new_iter_listeners = self.__new_iter_listeners
+            self.__new_iter_listeners = []
+
+        return set(new_iter_listeners), set(store_listeners)
 
     def notify_store_listeners(self, x_vect: DatabaseKeyType | None = None) -> None:
         """Notify the listeners that a new entry was stored in the database.
@@ -542,7 +616,7 @@ class Database(Mapping):
 
     def __notify_listeners(
         self,
-        listeners: list[Callable],
+        listeners: set[ListenerType],
         x_vect: DatabaseKeyType | None,
     ) -> None:
         """Notify the listeners.
@@ -745,10 +819,8 @@ class Database(Mapping):
         if with_x_vect:
             if not input_names:
                 x_names = [f"x_{i + 1}" for i in range(len(self))]
-            elif isinstance(input_names, str):
-                x_names = [input_names]
             else:
-                x_names = input_names
+                x_names = convert_strings_to_iterable(input_names)
 
             x_flat_names, x_flat_values = self.__split_history(x_history, x_names)
             variables_flat_names = f_flat_names + x_flat_names
@@ -877,3 +949,191 @@ class Database(Mapping):
             return iteration - 1
 
         return len_self + iteration
+
+    def to_dataset(
+        self,
+        design_space: DesignSpace,
+        name: str = "",
+        export_gradients: bool = False,
+        input_values: Iterable[RealArray] = (),
+        dataset_class: type[Dataset] = Dataset,
+        input_group: str = Dataset.DEFAULT_GROUP,
+        output_group: str = Dataset.DEFAULT_GROUP,
+        gradient_group: str = Dataset.GRADIENT_GROUP,
+    ) -> Dataset:
+        """Export the database to a :class:`.Dataset`.
+
+        Args:
+            design_space: The design space to which the input vector belongs.
+            name: The name to be given to the dataset.
+                If empty,
+                use the name of the database.
+            export_gradients: Whether to export the gradients of the functions
+                if the latter are available in the database of the problem.
+            input_values: The input values to be considered.
+                If empty, consider all the input values of the database.
+            dataset_class: The dataset class.
+            input_group: The name of the group to store the input values.
+            output_group: The name of the group to store the output values.
+            gradient_group: The name of the group to store the gradient values.
+
+        Returns:
+            A dataset built from the database.
+        """
+        dataset_name = name or self.name
+
+        # Add database inputs
+        input_names = design_space.variable_names
+        names_to_sizes = design_space.variable_sizes
+        names_to_types = {
+            (input_group, name, component): dtype(
+                design_space.VARIABLE_TYPES_TO_DTYPES[_type]
+            )
+            for name, types in design_space.variable_types.items()
+            for component, _type in enumerate(types)
+        }
+        input_history = array(self.get_x_vect_history())
+        n_samples = len(input_history)
+        positions = []
+        offset = 1 if issubclass(dataset_class, OptimizationDataset) else 0
+        for input_value in input_values:
+            _positions = ((input_history == input_value).all(axis=1)).nonzero()[0]
+            positions.extend((_positions + offset).tolist())
+
+        data = [input_history.real]
+        columns = [
+            (input_group, name, index)
+            for name in input_names
+            for index in range(names_to_sizes[name])
+        ]
+
+        # Add database outputs
+        variable_names = self.get_function_names()
+        output_names = [name for name in variable_names if name not in input_names]
+
+        self.__update_data_and_columns_for_dataset(
+            data,
+            columns,
+            names_to_types,
+            output_names,
+            n_samples,
+            output_group,
+            False,
+        )
+
+        # Add database output gradients
+        if export_gradients:
+            self.__update_data_and_columns_for_dataset(
+                data,
+                columns,
+                names_to_types,
+                output_names,
+                n_samples,
+                gradient_group,
+                True,
+            )
+
+        dataset = dataset_class(
+            hstack(data),
+            dataset_name=dataset_name,
+            columns=MultiIndex.from_tuples(
+                columns,
+                names=dataset_class.COLUMN_LEVEL_NAMES,
+            ),
+        ).get_view(indices=positions)
+
+        names_to_types_without_int = {
+            k: v for k, v in names_to_types.items() if not issubdtype(v, integer)
+        }
+        names_to_types_without_int.update({
+            k: float for k, v in names_to_types.items() if issubdtype(v, integer)
+        })
+        # "0.0" cannot be cast to int directly (try int("0.0")).
+        # So
+        # 1) we cast the str-like int to float
+        # 2) these float-like int to int.
+        return dataset.astype(names_to_types_without_int).astype(names_to_types)
+
+    def __update_data_and_columns_for_dataset(
+        self,
+        data: list[RealArray],
+        columns: list[tuple[str, str, int]],
+        names_to_types: dict[tuple[str, str, int], dtype],
+        output_names: Iterable[str],
+        n_samples: int,
+        group: str,
+        store_gradient: bool,
+    ) -> None:
+        """Update the data and the columns used to create the dataset.
+
+        Args:
+            data: The sequence of data arrays to be augmented with the output data.
+            columns: The multi-index columns to be augmented with the output names.
+            names_to_types: The types of the variables
+                to be augmented with the output names.
+            output_names: The names of the outputs in the database.
+            n_samples: The total number of samples,
+                including possible points where the evaluation failed.
+            group: The dataset group where the variables will be added.
+            store_gradient: Whether the variable of interest
+                is the gradient of the output.
+        """
+        x_vect_history = array(self.get_x_vect_history())
+        for output_name in output_names:
+            if store_gradient:
+                function_name = Database.get_gradient_name(output_name)
+                if self.check_output_history_is_empty(function_name):
+                    continue
+            else:
+                function_name = output_name
+
+            history, input_history = self.get_function_history(
+                function_name=function_name, with_x_vect=True
+            )
+            history = (
+                self.__replace_missing_values(
+                    history,
+                    input_history,
+                    x_vect_history,
+                )
+                .reshape((n_samples, -1))
+                .real
+            )
+            data.append(history)
+            _columns = [(group, function_name, i) for i in range(history.shape[1])]
+            columns.extend(_columns)
+            names_to_types.update(dict.fromkeys(_columns, atleast_1d(history).dtype))
+
+    @staticmethod
+    def __replace_missing_values(
+        output_history: RealArray,
+        input_history: RealArray,
+        full_input_history: RealArray,
+    ) -> RealArray:
+        """Replace the missing output values with NaN.
+
+        Args:
+            output_history: The output data history with possibly missing values.
+            input_history: The input data history with possibly missing values.
+            full_input_history: The complete input data history, with no missing values.
+
+        Returns:
+            The output data history where missing values have been replaced with NaN.
+        """
+        database_size = full_input_history.shape[0]
+
+        if len(input_history) != database_size:
+            # There are fewer entries than in the full input history.
+            # Add NaN values at the missing input data.
+            # N.B. the input data are assumed to be in the same order.
+            index = 0
+            for input_data in input_history:
+                while not array_equal(input_data, full_input_history[index]):
+                    output_history = insert(output_history, index, nan, 0)
+                    index += 1
+
+                index += 1
+
+            return insert(output_history, [index] * (database_size - index), nan, 0)
+
+        return output_history

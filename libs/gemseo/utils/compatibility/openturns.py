@@ -21,6 +21,9 @@ from typing import TYPE_CHECKING
 from typing import Final
 
 import openturns
+from openturns import AggregatedFunction
+from openturns import Basis
+from openturns import BasisFactory
 from packaging.version import Version
 from packaging.version import parse as parse_version
 
@@ -29,35 +32,29 @@ if TYPE_CHECKING:
 
 OT_VERSION: Final[Version] = parse_version(version("openturns"))
 
+OT_1_23: Final[Version] = parse_version("1.21")
 IS_OT_LOWER_THAN_1_20: Final[bool] = parse_version("1.20") > OT_VERSION
 
-if parse_version("1.17.0") > OT_VERSION:
+if parse_version("1.21") > OT_VERSION:  # pragma: no cover
 
-    def get_simulated_annealing_for_lhs(lhs, temperature, criteria):  # noqa:D103
-        return openturns.SimulatedAnnealingLHS(lhs, temperature, criteria)
-
-else:
-
-    def get_simulated_annealing_for_lhs(lhs, temperature, criteria):  # noqa:D103
-        return openturns.SimulatedAnnealingLHS(lhs, criteria, temperature)
-
-
-if parse_version("1.18") > OT_VERSION:
-
-    def get_eigenvalues(  # noqa:D103
-        result: openturns.KarhunenLoeveResult,
-    ) -> openturns.Point:
-        return result.getEigenValues()
+    def create_trend_basis(  # noqa: D103
+        basis_factory: type(BasisFactory), input_dimension: int, output_dimension: int
+    ) -> Basis:
+        return basis_factory(input_dimension).build()
 
 else:
 
-    def get_eigenvalues(  # noqa:D103
-        result: openturns.KarhunenLoeveResult,
-    ) -> openturns.Point:
-        return result.getEigenvalues()
+    def create_trend_basis(  # noqa: D103
+        basis_factory: type(BasisFactory), input_dimension: int, output_dimension: int
+    ) -> Basis:
+        basis = basis_factory(input_dimension).build()
+        return Basis([
+            AggregatedFunction([basis.build(k)] * output_dimension)
+            for k in range(basis.getSize())
+        ])
 
 
-if parse_version("1.20") <= OT_VERSION:
+if not IS_OT_LOWER_THAN_1_20:
 
     def compute_pcc(x: ndarray, y: ndarray) -> openturns.Point:  # noqa: D103
         return openturns.CorrelationAnalysis(x, y).computePCC()

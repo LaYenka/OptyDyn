@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
     from gemseo.algos.database import Database
     from gemseo.core.execution_sequence import LoopExecSequence
-    from gemseo.core.scenario import Scenario
+    from gemseo.scenarios.scenario import Scenario
 
 
 class MDOScenarioAdapter(MDODiscipline):
@@ -92,7 +92,7 @@ class MDOScenarioAdapter(MDODiscipline):
         cache_type: MDODiscipline.CacheType = MDODiscipline.CacheType.SIMPLE,
         output_multipliers: bool = False,
         grammar_type: MDODiscipline.GrammarType = MDODiscipline.GrammarType.JSON,
-        name: str | None = None,
+        name: str = "",
         keep_opt_history: bool = False,
         opt_history_file_prefix: str = "",
         scenario_log_level: int | None = None,
@@ -113,8 +113,8 @@ class MDOScenarioAdapter(MDODiscipline):
                 the Lagrange multipliers of the scenario optimal solution are computed
                 and added to the outputs.
             name: The name of the scenario adapter.
-                If ``None``, use the name of the scenario adapter
-                suffixed by ``"_adapter"``.
+                If empty,
+                use the name of the scenario adapter suffixed by ``"_adapter"``.
             keep_opt_history: Whether to keep databases copies after each execution.
             opt_history_file_prefix: The base name for the databases to be exported.
                 The full names of the databases are built from
@@ -189,7 +189,7 @@ class MDOScenarioAdapter(MDODiscipline):
                 or if a specified output is missing from the output grammar.
         """
         formulation = self.scenario.formulation
-        opt_problem = formulation.opt_problem
+        opt_problem = formulation.optimization_problem
         top_leveld = formulation.get_top_level_disc()
         for disc in top_leveld:
             self.input_grammar.update(disc.input_grammar)
@@ -255,7 +255,7 @@ class MDOScenarioAdapter(MDODiscipline):
         """Add the Lagrange multipliers of the scenario optimal solution as outputs."""
         # Fill a dictionary with data of typical shapes
         base_dict = {}
-        problem = self.scenario.formulation.opt_problem
+        problem = self.scenario.formulation.optimization_problem
         # bound-constraints multipliers
         current_x = problem.design_space.get_current_value(as_dict=True)
         base_dict.update({
@@ -269,7 +269,7 @@ class MDOScenarioAdapter(MDODiscipline):
         # equality- and inequality-constraints multipliers
         base_dict.update({
             self.get_cstr_mult_name(cstr_name): zeros(1)
-            for cstr_name in problem.get_constraint_names()
+            for cstr_name in problem.constraints.get_names()
         })
 
         # Update the output grammar
@@ -320,7 +320,7 @@ class MDOScenarioAdapter(MDODiscipline):
     def _pre_run(self) -> None:
         """Pre-run the scenario."""
         formulation = self.scenario.formulation
-        design_space = formulation.opt_problem.design_space
+        design_space = formulation.optimization_problem.design_space
         top_leveld = formulation.get_top_level_disc()
 
         # Update the top level discipline default inputs with adapter inputs
@@ -357,14 +357,14 @@ class MDOScenarioAdapter(MDODiscipline):
 
     def _reset_optimization_problem(self) -> None:
         """Reset the optimization problem."""
-        self.scenario.formulation.opt_problem.reset(
+        self.scenario.formulation.optimization_problem.reset(
             design_space=self._reset_x0_before_opt, database=False, preprocessing=False
         )
 
     def _post_run(self) -> None:
         """Post-process the scenario."""
         formulation = self.scenario.formulation
-        opt_problem = formulation.opt_problem
+        opt_problem = formulation.optimization_problem
         design_space = opt_problem.design_space
 
         if self.keep_opt_history and opt_problem.solution is not None:
@@ -381,8 +381,14 @@ class MDOScenarioAdapter(MDODiscipline):
         if last_eval_not_opt:
             # Revaluate all functions at optimum
             # To re execute all disciplines and get the right data
+            output_functions, jacobian_functions = opt_problem.get_functions(
+                no_db_no_norm=True
+            )
             opt_problem.evaluate_functions(
-                x_opt, normalize=False, no_db_no_norm=True, eval_observables=False
+                design_vector=x_opt,
+                design_vector_is_normalized=False,
+                output_functions=output_functions,
+                jacobian_functions=jacobian_functions,
             )
 
         # Retrieves top-level discipline outputs
@@ -400,7 +406,9 @@ class MDOScenarioAdapter(MDODiscipline):
         """
         formulation = self.scenario.formulation
         top_level_disciplines = formulation.get_top_level_disc()
-        current_x = formulation.opt_problem.design_space.get_current_value(as_dict=True)
+        current_x = formulation.optimization_problem.design_space.get_current_value(
+            as_dict=True
+        )
         for name in self._output_names:
             for discipline in top_level_disciplines:
                 if discipline.is_output_existing(name) and name not in current_x:
@@ -416,10 +424,10 @@ class MDOScenarioAdapter(MDODiscipline):
         This method stores the multipliers in the local data.
         """
         # Compute the Lagrange multipliers
-        problem = self.scenario.formulation.opt_problem
+        problem = self.scenario.formulation.optimization_problem
         x_opt = problem.solution.x_opt
         lagrange = LagrangeMultipliers(problem)
-        lagrange.compute(x_opt, problem.ineq_tolerance)
+        lagrange.compute(x_opt, problem.tolerances.inequality)
 
         # Store the Lagrange multipliers in the local data
         multipliers = lagrange.get_multipliers_arrays()
@@ -474,8 +482,10 @@ class MDOScenarioAdapter(MDODiscipline):
                 if a specified output is not an output of the adapter,
                 or if there is non-differentiable outputs.
         """
-        opt_problem = self.scenario.formulation.opt_problem
-        objective_names = self.scenario.formulation.opt_problem.objective.output_names
+        opt_problem = self.scenario.formulation.optimization_problem
+        objective_names = (
+            self.scenario.formulation.optimization_problem.objective.output_names
+        )
         if len(objective_names) != 1:
             msg = "The objective must be single-valued."
             raise ValueError(msg)
@@ -522,7 +532,7 @@ class MDOScenarioAdapter(MDODiscipline):
         jacobians = self._compute_auxiliary_jacobians(diff_inputs)
 
         # Perform the post-optimal analysis
-        ineq_tolerance = opt_problem.ineq_tolerance
+        ineq_tolerance = opt_problem.tolerances.inequality
         self.post_optimal_analysis = PostOptimalAnalysis(opt_problem, ineq_tolerance)
         post_opt_jac = self.post_optimal_analysis.execute(
             outputs, diff_inputs, jacobians
@@ -559,7 +569,7 @@ class MDOScenarioAdapter(MDODiscipline):
             The Jacobians of the optimization functions.
         """
         # Gather the names of the functions to differentiate
-        opt_problem = self.scenario.formulation.opt_problem
+        opt_problem = self.scenario.formulation.optimization_problem
         if func_names is None:
             func_names = opt_problem.objective.output_names + [
                 output_name

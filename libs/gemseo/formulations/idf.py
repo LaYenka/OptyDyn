@@ -34,20 +34,21 @@ from gemseo.core.coupling_structure import MDOCouplingStructure
 from gemseo.core.discipline import MDODiscipline
 from gemseo.core.execution_sequence import ExecutionSequence
 from gemseo.core.execution_sequence import ExecutionSequenceFactory
-from gemseo.core.formulation import MDOFormulation
-from gemseo.core.mdofunctions.consistency_constraint import ConsistencyCstr
+from gemseo.core.mdofunctions.consistency_constraint import ConsistencyConstraint
 from gemseo.core.mdofunctions.taylor_polynomials import compute_linear_approximation
+from gemseo.formulations.base_mdo_formulation import BaseMDOFormulation
 from gemseo.mda.mda_chain import MDAChain
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from typing import Any
 
     from gemseo.algos.design_space import DesignSpace
 
 LOGGER = logging.getLogger(__name__)
 
 
-class IDF(MDOFormulation):
+class IDF(BaseMDOFormulation):
     """The Individual Discipline Feasible (IDF) formulation.
 
     This formulation draws an optimization architecture where the coupling variables of
@@ -70,6 +71,8 @@ class IDF(MDOFormulation):
         use_threading: bool = True,
         start_at_equilibrium: bool = False,
         grammar_type: MDODiscipline.GrammarType = MDODiscipline.GrammarType.JSON,
+        differentiated_input_names_substitute: Iterable[str] = (),
+        **mda_options_for_start_at_equilibrium: Any,
     ) -> None:
         """
         Args:
@@ -87,6 +90,9 @@ class IDF(MDOFormulation):
                 you shall use multiprocessing.
             start_at_equilibrium: If ``True``,
                 an MDA is used to initialize the coupling variables.
+            mda_options_for_start_at_equilibrium: The options for the MDA when
+                ``start_at_equilibrium=True``.
+                See detailed options in :class:`.MDAChain`.
         """  # noqa: D205, D212, D415
         super().__init__(
             disciplines,
@@ -94,6 +100,7 @@ class IDF(MDOFormulation):
             design_space,
             maximize_objective=maximize_objective,
             grammar_type=grammar_type,
+            differentiated_input_names_substitute=differentiated_input_names_substitute,
         )
         if n_processes > 1:
             LOGGER.info(
@@ -117,16 +124,19 @@ class IDF(MDOFormulation):
         self._build_objective_from_disc(objective_name)
 
         if start_at_equilibrium:
-            self._compute_equilibrium()
+            self._compute_equilibrium(**mda_options_for_start_at_equilibrium)
 
-    def _compute_equilibrium(self) -> None:
+    def _compute_equilibrium(self, **mda_options: Any) -> None:
         """Run an MDA to compute the initial target couplings at equilibrium.
 
         The values at equilibrium are set in the initial design space.
+
+        Args:
+            mda_options: The options for the MDA chain.
         """
         current_x = self.design_space.get_current_value(as_dict=True)
         # run MDA to initialize target coupling variables
-        mda = MDAChain(self.disciplines)
+        mda = MDAChain(self.disciplines, **mda_options)
         res = mda.execute(current_x)
 
         for name in self.all_couplings:
@@ -142,7 +152,7 @@ class IDF(MDOFormulation):
     def _update_design_space(self) -> None:
         """Update the design space with the required variables."""
         strong_couplings = set(self.all_couplings)
-        variable_names = set(self.opt_problem.design_space.variable_names)
+        variable_names = set(self.optimization_problem.design_space.variable_names)
         if not strong_couplings.issubset(variable_names):
             missing = strong_couplings - variable_names
             msg = (
@@ -191,12 +201,15 @@ class IDF(MDOFormulation):
                 discipline, strong=False
             )
             if couplings:
-                cstr = ConsistencyCstr(couplings, self)
-                if cstr.linear_candidate:
-                    cstr = compute_linear_approximation(
-                        cstr, zeros(cstr.input_dimension)
+                constraint = ConsistencyConstraint(couplings, self)
+                discipline_adapter = constraint.coupling_function.discipline_adapter
+                if discipline_adapter.is_linear:
+                    constraint = compute_linear_approximation(
+                        constraint,
+                        zeros(discipline_adapter.input_dimension),
+                        f_type=constraint.ConstraintType.EQ,
                     )
-                self.opt_problem.add_eq_constraint(cstr)
+                self.optimization_problem.add_constraint(constraint)
 
     def get_expected_workflow(  # noqa:D102
         self,

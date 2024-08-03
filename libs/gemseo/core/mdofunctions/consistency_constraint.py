@@ -31,23 +31,22 @@ from numpy import ones_like
 from numpy import zeros
 
 from gemseo.core.mdofunctions.function_from_discipline import FunctionFromDiscipline
-from gemseo.core.mdofunctions.linear_candidate_function import LinearCandidateFunction
-from gemseo.core.mdofunctions.mdo_function import ArrayType
 from gemseo.core.mdofunctions.mdo_function import MDOFunction
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from gemseo.core.formulation import MDOFormulation
+    from gemseo.formulations.idf import IDF
+    from gemseo.typing import NumberArray
 
 
-class ConsistencyCstr(LinearCandidateFunction):
+class ConsistencyConstraint(MDOFunction):
     """An :class:`.MDOFunction` object to compute the consistency constraints."""
 
     def __init__(
         self,
         output_couplings: Sequence[str],
-        formulation: MDOFormulation,
+        formulation: IDF,
     ) -> None:
         """
         Args:
@@ -86,14 +85,11 @@ class ConsistencyCstr(LinearCandidateFunction):
         )
 
     @property
-    def linear_candidate(self) -> bool:  # noqa: D102
-        return self.__coupl_func.linear_candidate
+    def coupling_function(self) -> FunctionFromDiscipline:
+        """The coupling function."""
+        return self.__coupl_func
 
-    @property
-    def input_dimension(self) -> int | None:  # noqa: D102
-        return self.__coupl_func.input_dimension
-
-    def _func_to_wrap(self, x_vect: ArrayType) -> ArrayType:
+    def _func_to_wrap(self, x_vect: NumberArray) -> NumberArray:
         """Compute the consistency constraints.
 
         Args:
@@ -104,12 +100,12 @@ class ConsistencyCstr(LinearCandidateFunction):
             Equal to zero if the disciplines are at equilibrium.
         """
         x_sw = self.__formulation.mask_x_swap_order(self.__output_couplings, x_vect)
-        coupl = self.__coupl_func(x_vect)
+        coupl = self.__coupl_func.evaluate(x_vect)
         if self.__formulation.normalize_constraints:
             return (coupl - x_sw) / self.__norm_fact
         return coupl - x_sw
 
-    def _jac_to_wrap(self, x_vect: ArrayType) -> ArrayType:
+    def _jac_to_wrap(self, x_vect: NumberArray) -> NumberArray:
         """Compute the gradient of the consistency constraints.
 
         Args:

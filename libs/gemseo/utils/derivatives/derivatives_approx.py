@@ -37,9 +37,7 @@ from gemseo.utils.compatibility.scipy import sparse_classes
 from gemseo.utils.data_conversion import split_array_to_dict_of_arrays
 from gemseo.utils.derivatives.approximation_modes import ApproximationMode
 from gemseo.utils.derivatives.error_estimators import EPSILON
-from gemseo.utils.derivatives.gradient_approximator_factory import (
-    GradientApproximatorFactory,
-)
+from gemseo.utils.derivatives.factory import GradientApproximatorFactory
 from gemseo.utils.matplotlib_figure import save_show_figure
 
 if TYPE_CHECKING:
@@ -49,8 +47,9 @@ if TYPE_CHECKING:
 
     from gemseo.core.discipline import MDODiscipline
     from gemseo.core.discipline_data import DisciplineData
-    from gemseo.utils.derivatives.gradient_approximator import GradientApproximator
-
+    from gemseo.utils.derivatives.base_gradient_approximator import (
+        BaseGradientApproximator,
+    )
 
 from matplotlib import pyplot as plt
 from numpy import absolute
@@ -71,7 +70,7 @@ class DisciplineJacApprox:
 
     N_CPUS = cpu_count()
 
-    approximator: GradientApproximator | None
+    approximator: BaseGradientApproximator | None
     """The gradient approximation method."""
 
     def __init__(
@@ -139,12 +138,10 @@ class DisciplineJacApprox:
         Raises:
             ValueError: If the Jacobian approximation method is unknown.
         """
-        self.func = self.generator.get_function(
-            input_names=inputs, output_names=outputs
-        )
+        self.func = self.generator.get_function(inputs, outputs)
         self.approximator = GradientApproximatorFactory().create(
             self.approx_method,
-            self.func,
+            self.func.evaluate,
             step=self.step,
             parallel=self.__parallel,
             **self.__par_args,
@@ -522,7 +519,7 @@ class DisciplineJacApprox:
             if isinstance(indices_sequence[-1], slice):
                 indices_sequence[-1] = variable_indices[indices_sequence[-1]]
 
-            if indices_sequence[-1] in [Ellipsis, None]:
+            if indices_sequence[-1] in (Ellipsis, None):
                 indices_sequence[-1] = variable_indices
 
             names_to_indices[variable_name] = indices_sequence[-1]

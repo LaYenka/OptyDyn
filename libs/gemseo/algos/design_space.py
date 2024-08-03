@@ -68,9 +68,9 @@ from numpy import float64
 from numpy import full
 from numpy import genfromtxt
 from numpy import hstack
-from numpy import in1d
 from numpy import inf
 from numpy import int32
+from numpy import isin
 from numpy import isinf
 from numpy import isnan
 from numpy import logical_or
@@ -83,23 +83,26 @@ from numpy import where
 from numpy import zeros_like
 from strenum import StrEnum
 
-from gemseo.algos.opt_result import OptimizationResult
-from gemseo.core.cache import hash_data_dict
+from gemseo.algos.optimization_result import OptimizationResult
+from gemseo.caches.utils import hash_data
 from gemseo.third_party.prettytable import PrettyTable
-from gemseo.utils.compatibility.scipy import ArrayType
 from gemseo.utils.compatibility.scipy import sparse_classes
 from gemseo.utils.data_conversion import flatten_nested_dict
 from gemseo.utils.data_conversion import split_array_to_dict_of_arrays
 from gemseo.utils.hdf5 import get_hdf5_group
 from gemseo.utils.repr_html import REPR_HTML_WRAPPER
+from gemseo.utils.string_tools import convert_strings_to_iterable
 from gemseo.utils.string_tools import pretty_str
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from collections.abc import Iterator
     from collections.abc import Mapping
     from collections.abc import Sequence
 
     from numpy.typing import NDArray
+
+    from gemseo.typing import RealOrComplexArrayT
 
 LOGGER = logging.getLogger(__name__)
 
@@ -161,10 +164,11 @@ class DesignSpace(collections.abc.MutableMapping):
         u_b: ndarray | None = None
         value: ndarray | None = None
 
-    __VARIABLE_TYPES_TO_DTYPES: ClassVar[dict[str, str]] = {
+    VARIABLE_TYPES_TO_DTYPES: Final[dict[str, str]] = {
         DesignVariableType.FLOAT: "float64",
         DesignVariableType.INTEGER: "int32",
     }
+    """One NumPy ``dtype`` per design variable type."""
 
     MINIMAL_FIELDS: ClassVar[list[str]] = ["name", "lower_bound", "upper_bound"]
     TABLE_NAMES: ClassVar[list[str]] = [
@@ -345,8 +349,7 @@ class DesignSpace(collections.abc.MutableMapping):
         Raises:
             ValueError: If the variable is not in the design space.
         """
-        if isinstance(keep_variables, str):
-            keep_variables = [keep_variables]
+        keep_variables = convert_strings_to_iterable(keep_variables)
         design_space = deepcopy(self) if copy else self
         for name in deepcopy(self.variable_names):
             if name not in keep_variables:
@@ -357,16 +360,12 @@ class DesignSpace(collections.abc.MutableMapping):
                 raise ValueError(msg)
         return design_space
 
-    def filter_dim(
-        self,
-        variable: str,
-        keep_dimensions: Iterable[int],
-    ) -> DesignSpace:
+    def filter_dimensions(self, name: str, dimensions: Iterable[int]) -> DesignSpace:
         """Filter the design space to keep a subset of dimensions for a variable.
 
         Args:
-            variable: The name of the variable.
-            keep_dimensions: The dimensions of the variable to be kept,
+            name: The name of the variable.
+            dimensions: The dimensions of the variable to be kept,
                 between :math:`0` and :math:`d-1`
                 where :math:`d` is the number of dimensions of the variable.
 
@@ -374,37 +373,40 @@ class DesignSpace(collections.abc.MutableMapping):
             The filtered design space.
 
         Raises:
-            ValueError: If a dimension is unknown.
+            ValueError: If a dimension does not exist.
         """
-        self.__norm_data_is_computed = False
-        removed_dimensions = list(
-            set(range(self.variable_sizes[variable])) - set(keep_dimensions)
-        )
-        bad_dimensions = list(
-            set(keep_dimensions) - set(range(self.variable_sizes[variable]))
-        )
-        size = len(removed_dimensions)
-        self.dimension -= size
-        self.variable_sizes[variable] -= size
-        types = []
-        for dimension in keep_dimensions:
-            if dimension in bad_dimensions:
-                self.remove_variable(variable)
-                msg = f"Dimension {dimension} of variable '{variable}' is not known."
-                raise ValueError(msg)
-            types.append(self.variable_types[variable][dimension])
-        self.variable_types[variable] = array(types)
+        nonexistent_dimensions = {i for i in dimensions if i >= self.get_size(name)}
+        if nonexistent_dimensions:
+            plural = len(nonexistent_dimensions) > 1
+            msg = (
+                f"Dimension{'s' if plural else ''}"
+                f" {pretty_str(nonexistent_dimensions, use_and=True)}"
+                f" of variable '{name}' {'do' if plural else 'does'} not exist."
+            )
+            raise ValueError(msg)
 
-        idx = keep_dimensions
-        self.normalize[variable] = self.normalize[variable][idx]
-        if variable in self._lower_bounds:
-            self._lower_bounds[variable] = self._lower_bounds[variable][idx]
+        n_kept = len(dimensions)
+        n_removed = self.get_size(name) - n_kept
+        self.dimension -= n_removed
+        self.variable_sizes[name] -= n_removed
+        self._add_type(name, n_kept, self.get_type(name)[dimensions])
+        self.set_lower_bound(name, self.get_lower_bound(name)[dimensions])
+        self.set_upper_bound(name, self.get_upper_bound(name)[dimensions])
+        if name in self.__current_value:
+            self.set_current_variable(name, self.get_current_value(name)[dimensions])
 
-        if variable in self._upper_bounds:
-            self._upper_bounds[variable] = self._upper_bounds[variable][idx]
-
-        if variable in self.__current_value:
-            self.__current_value[variable] = self.__current_value[variable][idx]
+        # Update the mapping from names to array indices
+        name_reached = False
+        for _name, indices in self.__names_to_indices.items():
+            if _name == name:
+                name_reached = True
+                self.__names_to_indices[_name] = range(
+                    indices.start, indices.stop - n_removed
+                )
+            elif name_reached:
+                self.__names_to_indices[_name] = range(
+                    indices.start - n_removed, indices.stop - n_removed
+                )
 
         self.__update_current_metadata()
         return self
@@ -415,9 +417,9 @@ class DesignSpace(collections.abc.MutableMapping):
         size: int = 1,
         var_type: DesignVariableType
         | Sequence[DesignVariableType] = DesignVariableType.FLOAT,
-        l_b: float | ndarray | None = None,
-        u_b: float | ndarray | None = None,
-        value: float | ndarray | None = None,
+        l_b: Number | Iterable[Number] | None = None,
+        u_b: Number | Iterable[Number] | None = None,
+        value: Number | Iterable[Number] | None = None,
     ) -> None:
         r"""Add a variable to the design space.
 
@@ -465,7 +467,7 @@ class DesignSpace(collections.abc.MutableMapping):
             if len(array_value) == 1 and size > 1:
                 array_value = full(size, value)
             self.__current_value[name] = array_value.astype(
-                self.__VARIABLE_TYPES_TO_DTYPES[self.variable_types[name][0]],
+                self.VARIABLE_TYPES_TO_DTYPES[self.variable_types[name][0]],
                 copy=False,
             )
             try:
@@ -579,7 +581,7 @@ class DesignSpace(collections.abc.MutableMapping):
         normalize = empty(size)
         for i in range(size):
             var_type = variable_types[i]
-            if var_type in self.__VARIABLE_TYPES_TO_DTYPES:
+            if var_type in self.VARIABLE_TYPES_TO_DTYPES:
                 if (
                     self._lower_bounds[name][i] == -inf
                     or self._upper_bounds[name][i] == inf
@@ -1266,10 +1268,10 @@ class DesignSpace(collections.abc.MutableMapping):
 
     def normalize_vect(
         self,
-        x_vect: ArrayType,
+        x_vect: RealOrComplexArrayT,
         minus_lb: bool = True,
-        out: ndarray | None = None,
-    ) -> ArrayType:
+        out: RealOrComplexArrayT | None = None,
+    ) -> RealOrComplexArrayT:
         r"""Normalize a vector of the design space.
 
         If `minus_lb` is True:
@@ -1325,7 +1327,7 @@ class DesignSpace(collections.abc.MutableMapping):
 
         if isinstance(out, sparse_classes):
             # Construct a mask to only scale the required columns
-            column_mask = in1d(out.indices, norm_inds)
+            column_mask = isin(out.indices, norm_inds)
             # Scale the corresponding coefficients
             out.data[column_mask] *= self._norm_factor_inv[out.indices][column_mask]
         else:
@@ -1340,8 +1342,8 @@ class DesignSpace(collections.abc.MutableMapping):
 
     def normalize_grad(
         self,
-        g_vect: ArrayType,
-    ) -> ArrayType:
+        g_vect: RealOrComplexArrayT,
+    ) -> RealOrComplexArrayT:
         r"""Normalize an unnormalized gradient.
 
         This method is based on the chain rule:
@@ -1376,8 +1378,8 @@ class DesignSpace(collections.abc.MutableMapping):
 
     def unnormalize_grad(
         self,
-        g_vect: ArrayType,
-    ) -> ArrayType:
+        g_vect: RealOrComplexArrayT,
+    ) -> RealOrComplexArrayT:
         r"""Unnormalize a normalized gradient.
 
         This method is based on the chain rule:
@@ -1405,11 +1407,11 @@ class DesignSpace(collections.abc.MutableMapping):
 
     def unnormalize_vect(
         self,
-        x_vect: ArrayType,
+        x_vect: RealOrComplexArrayT,
         minus_lb: bool = True,
         no_check: bool = False,
         out: ndarray | None = None,
-    ) -> ArrayType:
+    ) -> RealOrComplexArrayT:
         """Unnormalize a normalized vector of the design space.
 
         If `minus_lb` is True:
@@ -1480,7 +1482,7 @@ class DesignSpace(collections.abc.MutableMapping):
 
         if isinstance(out, sparse_classes):
             # Construct a mask to only scale the required columns
-            column_mask = in1d(out.indices, norm_inds)
+            column_mask = isin(out.indices, norm_inds)
             # Scale the corresponding coefficients
             out.data[column_mask] *= self._norm_factor[out.indices][column_mask]
         else:
@@ -1578,7 +1580,9 @@ class DesignSpace(collections.abc.MutableMapping):
                 a NumPy array nor an :class:`.OptimizationResult`.
         """
         if isinstance(value, dict):
-            self.__current_value = value
+            self.__current_value = {
+                k: v for k, v in value.items() if k in self.variable_names
+            }
         elif isinstance(value, ndarray):
             if value.size != self.dimension:
                 msg = (
@@ -1610,7 +1614,7 @@ class DesignSpace(collections.abc.MutableMapping):
                 if isinstance(variable_type, ndarray):
                     variable_type = variable_type[0]
                 if variable_type == self.DesignVariableType.INTEGER:
-                    value = value.astype(self.__VARIABLE_TYPES_TO_DTYPES[variable_type])
+                    value = value.astype(self.VARIABLE_TYPES_TO_DTYPES[variable_type])
                 self.__current_value[name] = value
 
         self.__update_current_metadata()
@@ -1797,14 +1801,14 @@ class DesignSpace(collections.abc.MutableMapping):
         Returns:
             The bounds of the design variables.
         """
-        if self.__norm_data_is_computed and variable_names is None and not as_dict:
+        if self.__norm_data_is_computed and not variable_names and not as_dict:
             # The array of all the bounds is up to date
             return value_as_array
 
         if not as_dict:
             return self.dict_to_array(value_as_dict, variable_names=variable_names)
 
-        if variable_names is None:
+        if not variable_names:
             return value_as_dict
 
         return {name: value_as_dict[name] for name in variable_names}
@@ -1932,7 +1936,7 @@ class DesignSpace(collections.abc.MutableMapping):
             of the values of the mapping ``design_values`` corresponding to
             the keys iterable from ``variables_names``.
         """
-        if variable_names is None:
+        if not variable_names:
             variable_names = self.variable_names
 
         data = {name: design_values[name] for name in variable_names}
@@ -2349,7 +2353,7 @@ class DesignSpace(collections.abc.MutableMapping):
     def __len__(self) -> int:
         return len(self.variable_names)
 
-    def __iter__(self) -> Iterable[str]:
+    def __iter__(self) -> Iterator[str]:
         return iter(self.variable_names)
 
     def __setitem__(
@@ -2380,8 +2384,8 @@ class DesignSpace(collections.abc.MutableMapping):
             if key not in other:
                 return False
 
-            hash1 = hash_data_dict(flatten_nested_dict(val._asdict()))
-            hash2 = hash_data_dict(flatten_nested_dict(other[key]._asdict()))
+            hash1 = hash_data(flatten_nested_dict(val._asdict()))
+            hash2 = hash_data(flatten_nested_dict(other[key]._asdict()))
             if hash1 != hash2:
                 return False
 
@@ -2536,6 +2540,6 @@ class DesignSpace(collections.abc.MutableMapping):
                 name,
                 array(
                     current_value,
-                    dtype=self.__VARIABLE_TYPES_TO_DTYPES[var_type],
+                    dtype=self.VARIABLE_TYPES_TO_DTYPES[var_type],
                 ),
             )

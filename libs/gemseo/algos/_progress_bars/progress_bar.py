@@ -24,7 +24,7 @@ from gemseo.algos._progress_bars.base_progress_bar import BaseProgressBar
 from gemseo.algos._progress_bars.custom_tqdm_progress_bar import CustomTqdmProgressBar
 
 if TYPE_CHECKING:
-    from gemseo.algos.opt_problem import OptimizationProblem
+    from gemseo.algos.optimization_problem import OptimizationProblem
 
 
 class ProgressBar(BaseProgressBar):
@@ -45,14 +45,12 @@ class ProgressBar(BaseProgressBar):
     def __init__(
         self,
         max_iter: int,
-        first_iter: int,
         problem: OptimizationProblem,
         description: str = "",
     ) -> None:
         """
         Args:
             max_iter: The maximum number of iterations.
-            first_iter: The first iteration.
             problem: The problem for which the driver will evaluate the functions.
             description: The text prefixing the progress bar.
         """  # noqa: D205 D212 D415
@@ -62,19 +60,21 @@ class ProgressBar(BaseProgressBar):
             desc=description,
             ascii=False,
         )
-        self._tqdm_progress_bar.n = first_iter
+        self._tqdm_progress_bar.n = problem.evaluation_counter.current
         self.__is_current_iteration_logged = True
         self.__change_objective_sign = (
             not problem.minimize_objective and not problem.use_standardized_objective
         )
 
-    def set_objective_value(  # noqa D102
+    def set_objective_value(  # noqa: D102
         self, x_vect: ndarray | None, current_iter_must_not_be_logged: bool = False
     ) -> None:
         if current_iter_must_not_be_logged:
             if not self.__is_current_iteration_logged:
                 self._set_objective_value(
-                    self._problem.database.get_x_vect(self._problem.current_iter or -1)
+                    self._problem.database.get_x_vect(
+                        self._problem.evaluation_counter.current or -1
+                    )
                 )
         else:
             self._set_objective_value(x_vect)
@@ -110,10 +110,12 @@ class ProgressBar(BaseProgressBar):
         if self.__is_current_iteration_logged:
             self._tqdm_progress_bar.set_postfix(refresh=True, obj=obj)
 
-    def finalize_iter_observer(self):  # noqa D102
+    def finalize_iter_observer(self):  # noqa: D102
         if not self.__is_current_iteration_logged:
             self.set_objective_value(
-                self._problem.database.get_x_vect(self._problem.current_iter or -1)
+                self._problem.database.get_x_vect(
+                    self._problem.evaluation_counter.current or -1
+                )
             )
         self._tqdm_progress_bar.leave = False
         self._tqdm_progress_bar.close()

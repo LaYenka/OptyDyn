@@ -44,16 +44,16 @@ from typing import Any
 from typing import Union
 
 from gemseo.core.discipline import MDODiscipline
-from gemseo.core.doe_scenario import DOEScenario
 from gemseo.core.execution_sequence import AtomicExecSequence
 from gemseo.core.execution_sequence import CompositeExecSequence
 from gemseo.core.execution_sequence import LoopExecSequence
 from gemseo.core.execution_sequence import ParallelExecSequence
 from gemseo.core.execution_sequence import SerialExecSequence
-from gemseo.core.mdo_scenario import MDOScenario
 from gemseo.core.monitoring import Monitoring
 from gemseo.disciplines.scenario_adapters.mdo_scenario_adapter import MDOScenarioAdapter
-from gemseo.mda.mda import MDA
+from gemseo.mda.base_mda import BaseMDA
+from gemseo.scenarios.doe_scenario import DOEScenario
+from gemseo.scenarios.mdo_scenario import MDOScenario
 from gemseo.utils.locks import synchronized
 from gemseo.utils.show_utils import generate_xdsm_html
 from gemseo.utils.xdsm import XDSM
@@ -62,7 +62,7 @@ from gemseo.utils.xdsm_to_pdf import xdsm_data_to_pdf
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from gemseo.core.scenario import Scenario
+    from gemseo.scenarios.scenario import Scenario
 
 LOGGER = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ class XDSMizer:
             level: The depth of the scenario. Root scenario is level 0.
             expected_workflow: The expected workflow,
                 describing the sequence of execution of the different disciplines
-                (:class:`.MDODiscipline`, :class:`.Scenario`, :class:`.MDA`, etc.)
+                (:class:`.MDODiscipline`, :class:`.Scenario`, :class:`.BaseMDA`, etc.)
         """  # noqa:D205 D212 D415
         self.scenario = scenario
         self.level = level
@@ -287,7 +287,7 @@ class XDSMizer:
         nodes = self._create_nodes(algoname)
         edges = self._create_edges()
         workflow = self._create_workflow()
-        optpb = str(self.scenario.formulation.opt_problem)
+        optpb = str(self.scenario.formulation.optimization_problem)
 
         if self.level == 0:
             res = {
@@ -340,7 +340,7 @@ class XDSMizer:
         for atom_id, atom in enumerate(self.atoms):  # pylint: disable=too-many-nested-blocks
             # if a node already created from an atom with same discipline
             # at one level just reference the same node
-            for ref_atom in self.to_id:
+            for ref_atom in tuple(self.to_id):
                 if atom.discipline == ref_atom.discipline:
                     self.to_id[atom] = self.to_id[ref_atom]
 
@@ -371,7 +371,7 @@ class XDSMizer:
             node = {"id": self.to_id[atom], "name": atom.discipline.name}
 
             # node type
-            if isinstance(atom.discipline, MDA):
+            if isinstance(atom.discipline, BaseMDA):
                 node["type"] = "mda"
             elif atom.discipline.is_scenario():
                 node["type"] = "mdo"
@@ -409,13 +409,13 @@ class XDSMizer:
             edges.append(edge)
 
         # For User to/from optimization
-        opt_pb = self.scenario.formulation.opt_problem
+        opt_pb = self.scenario.formulation.optimization_problem
 
         # fct names such as -y4
-        function_name = opt_pb.get_all_function_name()
+        function_name = opt_pb.function_names
 
         # output variables used by the fonction (eg y4)
-        fct_varnames = [f.output_names for f in opt_pb.get_all_functions()]
+        fct_varnames = [f.output_names for f in opt_pb.functions]
         function_varnames = []
         for fvars in fct_varnames:
             function_varnames.extend(fvars)
@@ -452,7 +452,7 @@ class XDSMizer:
         for atom in self.atoms:
             if atom is not self.root_atom:
                 # special case MDA : skipped
-                if isinstance(atom.discipline, MDA):
+                if isinstance(atom.discipline, BaseMDA):
                     continue
                 out_to_user = [
                     o

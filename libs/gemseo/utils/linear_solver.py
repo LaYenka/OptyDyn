@@ -32,6 +32,8 @@ from scipy.sparse.linalg import bicgstab
 from scipy.sparse.linalg import cgs
 from strenum import LowercaseStrEnum
 
+from gemseo.utils.compatibility.scipy import TOL_OPTION
+
 if TYPE_CHECKING:
     from collections.abc import Sized
 
@@ -95,9 +97,9 @@ class LinearSolver:
         # check the dimensions of b
         b_vec = LinearSolver._check_b(a_mat, b_vec)
         # solve the system
-        if "tol" not in options:
-            options["tol"] = 1e-8
-        options["atol"] = options["tol"]
+        if TOL_OPTION not in options:
+            options[TOL_OPTION] = 1e-8
+        options["atol"] = options[TOL_OPTION]
 
         if "maxiter" not in options:
             options["maxiter"] = 50 * len(b_vec)

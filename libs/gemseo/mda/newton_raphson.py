@@ -26,12 +26,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from strenum import StrEnum
+
 from gemseo.algos.sequence_transformer.acceleration import AccelerationMethod
 from gemseo.core.discipline import MDODiscipline
-from gemseo.mda.root import MDARoot
+from gemseo.mda.base_mda_root import BaseMDARoot
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
     from collections.abc import Sequence
     from typing import Any
 
@@ -39,12 +40,13 @@ if TYPE_CHECKING:
 
     from gemseo.core.coupling_structure import MDOCouplingStructure
     from gemseo.core.discipline_data import DisciplineData
+    from gemseo.typing import StrKeyMapping
 
 
 LOGGER = logging.getLogger(__name__)
 
 
-class MDANewtonRaphson(MDARoot):
+class MDANewtonRaphson(BaseMDARoot):
     r"""Newton solver for MDA.
 
     The `Newton-Raphson method <https://en.wikipedia.org/wiki/Newton%27s_method>`__ is
@@ -63,14 +65,14 @@ class MDANewtonRaphson(MDARoot):
     where :math:`J_f(x_k)` denotes the Jacobian of :math:`f` at :math:`x_k`.
     """
 
-    # TODO: API: use a strenum
-    __newton_linear_solver_name: str
-    """The name of the linear solver for the Newton method.
+    class NewtonLinearSolver(StrEnum):
+        """A linear solver for the Newton method."""
 
-    Available names are "DEFAULT", "GMRES" and "BICGSTAB".
-    """
+        DEFAULT = "DEFAULT"
+        GMRES = "GEMRES"
+        BICGSTAB = "BICGSTAB"
 
-    __newton_linear_solver_options: Mapping[str, Any]
+    __newton_linear_solver_options: StrKeyMapping
     """The options of the Newton linear solver."""
 
     _newton_coupling_names: list[str]
@@ -80,8 +82,7 @@ class MDANewtonRaphson(MDARoot):
         self,
         disciplines: Sequence[MDODiscipline],
         max_mda_iter: int = 10,
-        relax_factor: float | None = None,  # TODO: API: Remove the argument.
-        name: str | None = None,
+        name: str = "",
         grammar_type: MDODiscipline.GrammarType = MDODiscipline.GrammarType.JSON,
         linear_solver: str = "DEFAULT",
         tolerance: float = 1e-6,
@@ -90,18 +91,17 @@ class MDANewtonRaphson(MDARoot):
         use_lu_fact: bool = False,
         coupling_structure: MDOCouplingStructure | None = None,
         log_convergence: bool = False,
-        linear_solver_options: Mapping[str, Any] | None = None,
-        newton_linear_solver_name: str = "DEFAULT",
-        newton_linear_solver_options: Mapping[str, Any] | None = None,
+        linear_solver_options: StrKeyMapping | None = None,
+        newton_linear_solver_name: NewtonLinearSolver = NewtonLinearSolver.DEFAULT,
+        newton_linear_solver_options: StrKeyMapping | None = None,
         parallel: bool = False,
         use_threading: bool = True,
-        n_processes: int = MDARoot.N_CPUS,
+        n_processes: int = BaseMDARoot.N_CPUS,
         acceleration_method: AccelerationMethod = AccelerationMethod.NONE,
         over_relaxation_factor: float = 0.99,
     ) -> None:
         """
         Args:
-            relax_factor: The relaxation factor.
             newton_linear_solver_name: The name of the linear solver for the Newton
                 method.
             newton_linear_solver_options: The options for the Newton linear solver.
@@ -110,10 +110,6 @@ class MDANewtonRaphson(MDARoot):
             ValueError: When there are no coupling variables, or when there are weakly
                 coupled disciplines. In these cases, use MDAChain.
         """  # noqa:D205 D212 D415
-        # TODO API: Remove the old name and attributes for over-relaxation factor.
-        if relax_factor is not None:
-            over_relaxation_factor = relax_factor
-
         super().__init__(
             disciplines,
             max_mda_iter=max_mda_iter,
@@ -158,26 +154,11 @@ class MDANewtonRaphson(MDARoot):
 
         self.__set_differentiated_ios()
 
-    # TODO: API: Remove the property and its setter.
-    @property
-    def relax_factor(self) -> float:
-        """The over-relaxation factor."""
-        return self.over_relaxation_factor
-
-    @relax_factor.setter
-    def relax_factor(self, relax_factor: float) -> None:
-        self.over_relaxation_factor = relax_factor
-
     def __set_differentiated_ios(self) -> None:
         """Set the differentiated inputs and outputs for the Newton algorithm.
 
         Also ensures that :attr:`.JacobianAssembly.sizes` contains the sizes of all
         the coupling sizes needed for Newton.
-
-        Args:
-            couplings: The coupling variables.
-            residual_variables: a mapping of residuals of disciplines to their
-                respective state variables.
         """
         for discipline in self.disciplines:
             inputs_to_linearize = set(discipline.get_input_data_names()).intersection(
@@ -199,8 +180,7 @@ class MDANewtonRaphson(MDARoot):
                 discipline.add_differentiated_inputs(inputs_to_linearize)
                 discipline.add_differentiated_outputs(outputs_to_linearize)
 
-    # TODO: API: prepend with verb.
-    def _newton_step(
+    def _compute_newton_step(
         self,
         input_data: dict[str, Any] | DisciplineData,
     ) -> NDArray:
@@ -211,7 +191,6 @@ class MDANewtonRaphson(MDARoot):
 
         Args:
             input_data: The input data for the disciplines.
-            residuals: The vector of coupling residuals.
 
         Returns:
             The Newton step.
@@ -246,7 +225,7 @@ class MDANewtonRaphson(MDARoot):
             self.linearize_all_disciplines(input_data, execute=False)
 
             self._update_residuals(input_data)
-            newton_step = self._newton_step(input_data)
+            newton_step = self._compute_newton_step(input_data)
 
             new_couplings = self._sequence_transformer.compute_transformed_iterate(
                 input_couplings + newton_step,

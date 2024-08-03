@@ -20,22 +20,22 @@ from typing import TYPE_CHECKING
 
 from numpy import ndarray
 
+from gemseo.core.mdofunctions.mdo_function import MDOFunction
 from gemseo.core.mdofunctions.mdo_linear_function import MDOLinearFunction
 from gemseo.core.mdofunctions.mdo_quadratic_function import MDOQuadraticFunction
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from gemseo.core.mdofunctions.mdo_function import ArrayType
-    from gemseo.core.mdofunctions.mdo_function import MDOFunction
+    from gemseo.typing import NumberArray
 
 
 def compute_linear_approximation(
     function: MDOFunction,
-    x_vect: ArrayType,
-    name: str | None = None,
-    f_type: str | None = None,
-    input_names: Sequence[str] | None = None,
+    x_vect: NumberArray,
+    name: str = "",
+    f_type: MDOFunction.FunctionType = MDOFunction.FunctionType.NONE,
+    input_names: Sequence[str] = (),
 ) -> MDOLinearFunction:
     r"""Compute a first-order Taylor polynomial of a function.
 
@@ -59,7 +59,7 @@ def compute_linear_approximation(
             If ``None``, the function will have no type.
         input_names: The names of the inputs of the linear approximation function,
             or a name base.
-            If ``None``, use the names of the inputs of the function.
+            If empty, use the names of the inputs of the function.
 
     Returns:
         The first-order Taylor polynomial of the function at the input vector.
@@ -72,25 +72,25 @@ def compute_linear_approximation(
         raise AttributeError(msg)
 
     coefficients = function.jac(x_vect)
-    func_val = function.evaluate(x_vect)
+    func_val = function.func(x_vect)
     if isinstance(func_val, ndarray):
         # Make sure the function value is at most 1-dimensional
         func_val = func_val.flatten()
 
     return MDOLinearFunction(
         coefficients,
-        f"{function.name}_linearized" if name is None else name,
+        name or f"{function.name}_linearized",
         f_type,
-        input_names if input_names else function.input_names,
+        input_names or function.input_names,
         func_val - coefficients @ x_vect,
     )
 
 
 def compute_quadratic_approximation(
     function: MDOFunction,
-    x_vect: ArrayType,
-    hessian_approx: ArrayType,
-    input_names: Sequence[str] | None = None,
+    x_vect: NumberArray,
+    hessian_approx: NumberArray,
+    input_names: Sequence[str] = (),
 ) -> MDOQuadraticFunction:
     r"""Build a quadratic approximation of a function at a given point.
 
@@ -119,7 +119,7 @@ def compute_quadratic_approximation(
             at this input vector.
         input_names: The names of the inputs of the quadratic approximation function,
             or a base name.
-            If ``None``, use the ones of the current function.
+            If empty, use the ones of the current function.
 
     Returns:
         The second-order Taylor polynomial of the function at the given point.
@@ -150,5 +150,5 @@ def compute_quadratic_approximation(
             (0.5 * hess_dot_vect - gradient).T @ x_vect + function.evaluate(x_vect)
         ),
         name=f"{function.name}_quadratized",
-        input_names=input_names if input_names else function.input_names,
+        input_names=input_names or function.input_names,
     )

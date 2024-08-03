@@ -23,13 +23,14 @@ from numpy import ndarray
 from numpy import zeros
 from numpy import zeros_like
 
-from gemseo.core.mdofunctions.mdo_function import ArrayType
 from gemseo.core.mdofunctions.mdo_function import MDOFunction
 from gemseo.core.mdofunctions.mdo_function import OutputType
 from gemseo.core.mdofunctions.mdo_linear_function import MDOLinearFunction
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from gemseo.typing import NumberArray
 
 
 class MDOQuadraticFunction(MDOFunction):
@@ -53,26 +54,19 @@ class MDOQuadraticFunction(MDOFunction):
 
     def __init__(
         self,
-        quad_coeffs: ArrayType,
+        quad_coeffs: NumberArray,
         name: str,
-        f_type: str | None = None,
-        input_names: Sequence[str] | None = None,
-        linear_coeffs: ArrayType | None = None,
+        f_type: MDOFunction.FunctionType = MDOFunction.FunctionType.NONE,
+        input_names: Sequence[str] = (),
+        linear_coeffs: NumberArray | None = None,
         value_at_zero: OutputType = 0.0,
     ) -> None:
         """
         Args:
             quad_coeffs: The second-order coefficients.
-            name: The name of the function.
-            f_type: The type of the linear function
-                among :attr:`.MDOFunction.FunctionType`.
-                If ``None``, the linear function will have no type.
-            input_names: The names of the inputs of the linear function.
-                If ``None``, the inputs of the linear function will have no names.
             linear_coeffs: The first-order coefficients.
                 If ``None``, the first-order coefficients will be zero.
             value_at_zero: The zero-order coefficient.
-                If ``None``, the value at zero will be zero.
         """  # noqa: D205, D212, D415
         self._input_dim = 0
         self._quad_coeffs = array([])
@@ -101,7 +95,7 @@ class MDOQuadraticFunction(MDOFunction):
             dim=1,
         )
 
-    def _func_to_wrap(self, x_vect: ArrayType) -> ArrayType:
+    def _func_to_wrap(self, x_vect: NumberArray) -> NumberArray:
         """Compute the output of the quadratic function.
 
         Args:
@@ -112,11 +106,11 @@ class MDOQuadraticFunction(MDOFunction):
         """
         return (
             x_vect.T @ (self._quad_coeffs @ x_vect)
-            + self._linear_part(x_vect)
+            + self._linear_part.func(x_vect)
             + self._value_at_zero
         )
 
-    def _jac_to_wrap(self, x_vect: ArrayType) -> ArrayType:
+    def _jac_to_wrap(self, x_vect: NumberArray) -> NumberArray:
         """Compute the gradient of the quadratic function.
 
         Args:
@@ -130,7 +124,7 @@ class MDOQuadraticFunction(MDOFunction):
         ) @ x_vect + self._linear_part.jac(x_vect)
 
     @property
-    def quad_coeffs(self) -> ArrayType:
+    def quad_coeffs(self) -> NumberArray:
         """The second-order coefficients of the function.
 
         Raises:
@@ -140,7 +134,7 @@ class MDOQuadraticFunction(MDOFunction):
         return self._quad_coeffs
 
     @quad_coeffs.setter
-    def quad_coeffs(self, coefficients: ArrayType) -> None:
+    def quad_coeffs(self, coefficients: NumberArray) -> None:
         # Check the second-order coefficients
         if (
             not isinstance(coefficients, ndarray)
@@ -156,7 +150,7 @@ class MDOQuadraticFunction(MDOFunction):
         self._input_dim = self._quad_coeffs.shape[0]
 
     @property
-    def linear_coeffs(self) -> ArrayType:
+    def linear_coeffs(self) -> NumberArray:
         """The first-order coefficients of the function.
 
         Raises:
@@ -166,7 +160,7 @@ class MDOQuadraticFunction(MDOFunction):
         return self._linear_part.coefficients
 
     @linear_coeffs.setter
-    def linear_coeffs(self, coefficients: ArrayType) -> None:
+    def linear_coeffs(self, coefficients: NumberArray) -> None:
         if coefficients.size != self._input_dim:
             msg = (
                 "The number of first-order coefficients must be equal "
@@ -178,10 +172,10 @@ class MDOQuadraticFunction(MDOFunction):
     @classmethod
     def __build_expression(
         cls,
-        quad_coeffs: ArrayType,
+        quad_coeffs: NumberArray,
         input_names: Sequence[str],
-        linear_coeffs: ArrayType | None = None,
-        value_at_zero: float | None = None,
+        linear_coeffs: NumberArray,
+        value_at_zero: OutputType,
     ) -> str:
         """Build the expression of the quadratic function.
 
@@ -191,7 +185,6 @@ class MDOQuadraticFunction(MDOFunction):
             linear_coeffs: The first-order coefficients.
                 If ``None``, the first-order coefficients will be zero.
             value_at_zero: The zero-order coefficient.
-                If ``None``, the value at zero will be zero.
 
         Returns:
             The expression of the quadratic function.
@@ -217,7 +210,7 @@ class MDOQuadraticFunction(MDOFunction):
                 expr += transpose_str if index == 0 else " "
                 expr += f"[{arg}]"
             # Zero-order expression
-            if value_at_zero is not None and value_at_zero != 0.0 and index == 0:
+            if value_at_zero != 0.0 and index == 0:
                 sign_str = "+" if value_at_zero > 0.0 else "-"
                 expr += (" {} " + cls.COEFF_FORMAT_ND).format(
                     sign_str, abs(value_at_zero)

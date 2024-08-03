@@ -29,9 +29,9 @@ or from a NumPy array (:meth:`~.Dataset.from_array`),
 and can be enriched from a group of variables (:meth:`~.Dataset.add_group`)
 or from a single variable (:meth:`~.Dataset.add_variable`).
 
-An :class:`.AbstractFullCache` or an :class:`.OptimizationProblem`
+An :class:`.BaseFullCache` or an :class:`.OptimizationProblem`
 can also be exported to a :class:`.Dataset`
-using the methods :meth:`.AbstractFullCache.to_dataset`
+using the methods :meth:`.BaseFullCache.to_dataset`
 and :meth:`.OptimizationProblem.to_dataset`.
 """
 
@@ -414,11 +414,11 @@ class Dataset(DataFrame, metaclass=GoogleDocstringInheritanceMeta):
         original_sortorder = self.columns.sortorder
         self.columns.sortorder = 0
         self.loc[
-            self.__to_slice_or_list(indices),
+            self._to_slice_or_list(indices),
             (
-                self.__to_slice_or_list(group_names),
-                self.__to_slice_or_list(variable_names),
-                self.__to_slice_or_list(components),
+                self._to_slice_or_list(group_names),
+                self._to_slice_or_list(variable_names),
+                self._to_slice_or_list(components),
             ),
         ] = data
         self.columns.sortorder = original_sortorder
@@ -636,18 +636,18 @@ class Dataset(DataFrame, metaclass=GoogleDocstringInheritanceMeta):
         original_sortorder = self.columns.sortorder
         self.columns.sortorder = 0
         data = self.loc[
-            self.__to_slice_or_list(indices),
+            self._to_slice_or_list(indices),
             (
-                self.__to_slice_or_list(group_names),
-                self.__to_slice_or_list(variable_names),
-                self.__to_slice_or_list(components),
+                self._to_slice_or_list(group_names),
+                self._to_slice_or_list(variable_names),
+                self._to_slice_or_list(components),
             ),
         ]
         self.columns.sortorder = original_sortorder
         return data
 
     @staticmethod
-    def __to_slice_or_list(obj: Any) -> slice | list[Any]:
+    def _to_slice_or_list(obj: Any) -> slice | list[Any]:
         """Convert an object to a ``slice`` or a ``list``.
 
         Args:

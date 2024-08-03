@@ -33,21 +33,21 @@ from numpy.ma import allequal
 from gemseo import LOGGER
 from gemseo.algos.aggregation.aggregation_func import aggregate_positive_sum_square
 from gemseo.algos.aggregation.aggregation_func import aggregate_sum_square
-from gemseo.algos.opt.opt_factory import OptimizersFactory
-from gemseo.algos.opt.optimization_library import OptimizationLibrary
-from gemseo.algos.opt_problem import OptimizationProblem
+from gemseo.algos.opt.base_optimization_library import BaseOptimizationLibrary
+from gemseo.algos.opt.factory import OptimizationLibraryFactory
+from gemseo.algos.optimization_problem import OptimizationProblem
 from gemseo.utils.metaclasses import ABCGoogleDocstringInheritanceMeta
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from collections.abc import Mapping
 
-    from gemseo.algos.opt_result import OptimizationResult
+    from gemseo.algos.optimization_result import OptimizationResult
     from gemseo.core.mdofunctions.mdo_function import MDOFunction
+    from gemseo.typing import StrKeyMapping
 
 
 class BaseAugmentedLagrangian(
-    OptimizationLibrary, metaclass=ABCGoogleDocstringInheritanceMeta
+    BaseOptimizationLibrary, metaclass=ABCGoogleDocstringInheritanceMeta
 ):
     """This is an abstract base class for augmented lagrangian optimization algorithms.
 
@@ -57,8 +57,6 @@ class BaseAugmentedLagrangian(
 
     __n_obj_func_calls: int
     """The total number of objective function calls."""
-
-    LIBRARY_NAME = "GEMSEO"
 
     __SUB_PROBLEM_CONSTRAINTS: Final[str] = "sub_problem_constraints"
     """The name of the option that corresponds to sub problem constraints."""
@@ -77,8 +75,8 @@ class BaseAugmentedLagrangian(
     _function_outputs: dict[str, float | ndarray]
     """The current iteration function outputs."""
 
-    def __init__(self) -> None:  # noqa:D107
-        super().__init__()
+    def __init__(self, algo_name: str) -> None:  # noqa:D107
+        super().__init__(algo_name)
         self.__n_obj_func_calls = 0
         self._function_outputs = {}
 
@@ -97,7 +95,7 @@ class BaseAugmentedLagrangian(
         ineq_tolerance: float = 1e-4,
         kkt_tol_abs: float | None = None,
         kkt_tol_rel: float | None = None,
-        sub_problem_options: Mapping[str, Any] | None = None,
+        sub_problem_options: StrKeyMapping | None = None,
         sub_problem_constraints: Iterable[str] = (),
         initial_rho: float = 10.0,
         **options: Any,
@@ -125,9 +123,11 @@ class BaseAugmentedLagrangian(
             max_fun_eval: The internal stop criteria on the
                number of algorithm outer iterations.
             kkt_tol_abs: The absolute tolerance on the KKT residual norm.
-                If ``None`` this criterion is not activated.
+                If ``None`` and ``kkt_tol_rel`` is ``None``,
+                this criterion is not considered.
             kkt_tol_rel: The relative tolerance on the KKT residual norm.
-                If ``None`` this criterion is not activated.
+                If ``None`` and ``kkt_tol_abs`` is ``None``,
+                this criterion is not considered.
             eq_tolerance: The tolerance on the equality constraints.
             ineq_tolerance: The tolerance on the inequality constraints.
             normalize_design_space: Whether to scale the variables into ``[0, 1]``.
@@ -157,36 +157,33 @@ class BaseAugmentedLagrangian(
             **options,
         )
 
-    def _run(self, **options: Any) -> OptimizationResult:
+    def _run(self, problem: OptimizationProblem, **options: Any) -> OptimizationResult:
         # Initialize the penalty and the multipliers.
         self._rho = options[self.__INITIAL_RHO]
         active_constraint_residual = inf
-        x = self.problem.design_space.get_current_value()
-        normalize = options[self.NORMALIZE_DESIGN_SPACE_OPTION]
+        x = problem.design_space.get_current_value()
+        normalize = options[self._NORMALIZE_DESIGN_SPACE_OPTION]
         problem_ineq_constraints = [
             constr
-            for constr in self.problem.get_ineq_constraints()
+            for constr in problem.constraints.get_inequality_constraints()
             if constr.name not in options[self.__SUB_PROBLEM_CONSTRAINTS]
         ]
         problem_eq_constraints = [
             constr
-            for constr in self.problem.get_eq_constraints()
+            for constr in problem.constraints.get_equality_constraints()
             if constr.name not in options[self.__SUB_PROBLEM_CONSTRAINTS]
         ]
+        current_value = self.problem.design_space.get_current_value(normalize=normalize)
         eq_multipliers = {
-            h.name: zeros_like(
-                h(self.problem.design_space.get_current_value(normalize=normalize))
-            )
+            h.name: zeros_like(h.evaluate(current_value))
             for h in problem_eq_constraints
         }
         ineq_multipliers = {
-            g.name: zeros_like(
-                g(self.problem.design_space.get_current_value(normalize=normalize))
-            )
+            g.name: zeros_like(g.evaluate(current_value))
             for g in problem_ineq_constraints
         }
 
-        for iteration in range(options[self.MAX_ITER]):
+        for iteration in range(options[self._MAX_ITER]):
             LOGGER.debug("iteration: %s", iteration)
             LOGGER.debug(
                 "inequality Lagrange multiplier approximations:  %s", ineq_multipliers
@@ -243,17 +240,17 @@ class BaseAugmentedLagrangian(
                 break
 
             x = x_new
-        return self.get_optimum_from_database(message)
+        return self._get_optimum_from_database(problem, message)
 
     def _post_run(
         self,
         problem: OptimizationProblem,
-        algo_name: str,
         result: OptimizationResult,
+        max_design_space_dimension_to_log: int,
         **options: Any,
     ) -> None:
         result.n_obj_call = self.__n_obj_func_calls
-        super()._post_run(problem, algo_name, result, **options)
+        super()._post_run(problem, result, max_design_space_dimension_to_log, **options)
 
     @staticmethod
     def _check_termination_criteria(
@@ -302,9 +299,13 @@ class BaseAugmentedLagrangian(
             the active inequality constraint residuals.
         """
         self.problem.design_space.set_current_value(x_opt)
+        compute_jacobians = self.ALGORITHM_INFOS[self.algo_name].require_gradient
+        output_functions, jacobian_functions = self.problem.get_functions(
+            jacobian_names=() if compute_jacobians else None,
+            evaluate_objective=True,
+        )
         self._function_outputs, _ = self.problem.evaluate_functions(
-            eval_jac=self.descriptions[self.algo_name].require_gradient,
-            eval_obj=True,
+            output_functions=output_functions, jacobian_functions=jacobian_functions
         )
         f_opt = self._function_outputs[self.problem.objective.name]
         gv = [
@@ -335,7 +336,7 @@ class BaseAugmentedLagrangian(
         normalize: bool,
         sub_problem_constraints: Iterable[str],
         sub_solver_algorithm: str,
-        sub_problem_options: Mapping[str, Any],
+        sub_problem_options: StrKeyMapping,
         x_init: ndarray,
     ) -> tuple[int, ndarray]:
         """Solve the sub-problem.
@@ -362,13 +363,13 @@ class BaseAugmentedLagrangian(
         dspace.set_current_value(x_init)
         sub_problem = OptimizationProblem(dspace)
         sub_problem.objective = lagrangian
-        for constraint in self.problem.nonproc_constraints:
+        for constraint in self.problem.constraints.get_originals():
             if constraint.name in sub_problem_constraints:
                 sub_problem.constraints.append(constraint)
         sub_problem.preprocess_functions(is_function_input_normalized=normalize)
 
         # Solve the sub-problem.
-        opt = OptimizersFactory().execute(
+        opt = OptimizationLibraryFactory().execute(
             sub_problem,
             sub_solver_algorithm,
             **sub_problem_options,
@@ -435,8 +436,8 @@ class BaseAugmentedLagrangian(
         Returns:
             The lagrangian function.
         """
-        lagrangian = self.problem.nonproc_objective
-        for constr in self.problem.nonproc_constraints:
+        lagrangian = self.problem.objective.original
+        for constr in self.problem.constraints.get_originals():
             if constr.name in ineq_lag:
                 lagrangian += aggregate_positive_sum_square(
                     constr + ineq_lag[constr.name] / rho, scale=rho / 2

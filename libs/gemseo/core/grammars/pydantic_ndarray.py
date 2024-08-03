@@ -24,8 +24,16 @@ from typing import cast
 
 from numpy import dtype
 from numpy import ndarray
-from numpy._typing._array_like import _DType_co
-from numpy._typing._array_like import _ScalarType_co
+
+try:
+    from numpy._typing._array_like import _DType_co
+    from numpy._typing._array_like import _ScalarType_co
+except (ModuleNotFoundError, ImportError):  # pragma: no cover
+    from numpy import generic
+
+    _DType_co = TypeVar("_DType_co", covariant=True, bound=dtype[Any])  # type: ignore[misc] # mypy seems to ignore the except block.
+    _ScalarType_co = TypeVar("_ScalarType_co", bound=generic, covariant=True)  # type: ignore[misc] # mypy seems to ignore the except block.
+
 from numpy.typing import NDArray
 from pydantic_core import CoreSchema
 from pydantic_core import core_schema
@@ -99,7 +107,7 @@ class _NDArrayPydantic(ndarray[_ShapeType, _DType_co]):
             #     raise ValueError(msg)
 
             # First check that the source dtype is not catch-all then the actual dtype.
-            if dtype_ not in (Any, _ScalarType_co) and data.dtype != dtype_:
+            if dtype_ not in {Any, _ScalarType_co} and data.dtype != dtype_:
                 msg = (
                     f"Input dtype should be {dtype_}: "
                     f"got the dtype {data.dtype.type}"

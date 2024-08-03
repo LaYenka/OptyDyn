@@ -44,11 +44,12 @@ from numpy import zeros
 from scipy.sparse import csr_array
 from strenum import StrEnum
 
-from gemseo.caches.cache_factory import CacheFactory
+from gemseo.caches.factory import CacheFactory
 from gemseo.caches.simple_cache import SimpleCache
 from gemseo.core.derivatives.derivation_modes import DerivationMode
 from gemseo.core.discipline_data import DisciplineData
 from gemseo.core.grammars.factory import GrammarFactory
+from gemseo.core.namespaces import namespaces_separator
 from gemseo.core.namespaces import remove_prefix_from_list
 from gemseo.core.serializable import Serializable
 from gemseo.disciplines.utils import get_sub_disciplines
@@ -56,7 +57,7 @@ from gemseo.utils.derivatives.approximation_modes import ApproximationMode
 from gemseo.utils.derivatives.derivatives_approx import EPSILON
 from gemseo.utils.derivatives.derivatives_approx import DisciplineJacApprox
 from gemseo.utils.enumeration import merge_enums
-from gemseo.utils.multiprocessing import get_multi_processing_manager
+from gemseo.utils.multiprocessing.manager import get_multi_processing_manager
 from gemseo.utils.string_tools import MultiLineString
 from gemseo.utils.string_tools import pretty_str
 
@@ -66,14 +67,15 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from collections.abc import MutableMapping
 
-    from numpy.typing import NDArray
-
-    from gemseo.core.cache import AbstractCache
+    from gemseo.caches.base_cache import BaseCache
     from gemseo.core.data_processor import DataProcessor
     from gemseo.core.derivatives.jacobian_operator import JacobianOperator
     from gemseo.core.execution_sequence import AtomicExecSequence
     from gemseo.core.grammars.base_grammar import BaseGrammar
     from gemseo.core.grammars.defaults import Defaults
+    from gemseo.typing import JacobianData
+    from gemseo.typing import MutableStrKeyMapping
+    from gemseo.typing import StrKeyMapping
 
 LOGGER = logging.getLogger(__name__)
 
@@ -198,7 +200,7 @@ class MDODiscipline(Serializable):
     For each output define one or many inputs that in linear relationship with it.
     """
 
-    cache: AbstractCache | None
+    cache: BaseCache | None
     """The cache containing one or several executions of the discipline according to the
     cache policy."""
 
@@ -238,7 +240,7 @@ class MDODiscipline(Serializable):
 
     def __init__(
         self,
-        name: str | None = None,
+        name: str = "",
         input_grammar_file: str | Path | None = None,
         output_grammar_file: str | Path | None = None,
         auto_detect_grammar_files: bool = False,
@@ -249,7 +251,7 @@ class MDODiscipline(Serializable):
         """
         Args:
             name: The name of the discipline.
-                If ``None``, use the class name.
+                If empty, use the class name.
             input_grammar_file: The input grammar file path.
                 If ``None`` and ``auto_detect_grammar_files=True``,
                 look for ``"ClassName_input.json"``
@@ -272,7 +274,7 @@ class MDODiscipline(Serializable):
             grammar_type: The type of the input and output grammars.
             cache_type: The type of cache.
             cache_file_path: The HDF file path
-                when ``grammar_type`` is :attr:`.MDODiscipline.CacheType.HDF5`.
+                when ``cache_type`` is :attr:`.MDODiscipline.CacheType.HDF5`.
         """  # noqa: D205, D212, D415
         self.data_processor = None
         self.input_grammar = None
@@ -308,10 +310,7 @@ class MDODiscipline(Serializable):
 
         # the last execution was due to a linearization
         self.exec_for_lin = False
-        if name is None:
-            self.name = self.__class__.__name__
-        else:
-            self.name = name
+        self.name = name or self.__class__.__name__
 
         self.cache = None
         if not self.activate_cache:
@@ -344,7 +343,7 @@ class MDODiscipline(Serializable):
 
         self._status = self.ExecutionStatus.PENDING
         if self.activate_counters:
-            self._init_shared_memory_attrs()
+            self._init_shared_memory_attrs_before()
 
         self._status_observers = []
         self.__linear_relationships = {}
@@ -393,7 +392,7 @@ class MDODiscipline(Serializable):
     def _repr_html_(self) -> str:
         return self._string_representation._repr_html_()
 
-    def _init_shared_memory_attrs(self) -> None:
+    def _init_shared_memory_attrs_before(self) -> None:
         self._n_calls = Value("i", 0)
         self._exec_time = Value("d", 0.0)
         self._n_calls_linearize = Value("i", 0)
@@ -409,15 +408,11 @@ class MDODiscipline(Serializable):
         return self._local_data
 
     @local_data.setter
-    def local_data(self, data: MutableMapping[str, Any]) -> None:
+    def local_data(self, data: MutableStrKeyMapping) -> None:
         self.__set_local_data(data)
 
-    def __set_local_data(self, data: MutableMapping[str, Any]) -> None:
-        self._local_data = DisciplineData(
-            data,
-            input_to_namespaced=self.input_grammar.to_namespaced,
-            output_to_namespaced=self.output_grammar.to_namespaced,
-        )
+    def __set_local_data(self, data: MutableStrKeyMapping) -> None:
+        self._local_data = DisciplineData(data)
 
     @property
     def n_calls(self) -> int | None:
@@ -637,7 +632,7 @@ class MDODiscipline(Serializable):
         self,
         class_name: str,
         **kwargs: bool | float | str,
-    ) -> AbstractCache:
+    ) -> BaseCache:
         """Create a cache object.
 
         Args:
@@ -765,7 +760,7 @@ class MDODiscipline(Serializable):
 
         .. seealso::
 
-           MDOFormulation.get_expected_workflow
+           BaseMDOFormulation.get_expected_workflow
 
         Returns:
             The expected execution sequence.
@@ -786,7 +781,7 @@ class MDODiscipline(Serializable):
 
         .. seealso::
 
-           MDOFormulation.get_expected_dataflow
+           BaseMDOFormulation.get_expected_dataflow
 
         Returns:
             The data exchange arcs.
@@ -841,7 +836,7 @@ class MDODiscipline(Serializable):
 
     def _filter_inputs(
         self,
-        input_data: Mapping[str, Any] | None = None,
+        input_data: StrKeyMapping | None = None,
     ) -> DisciplineData:
         """Filter data with the discipline inputs and use the default values if missing.
 
@@ -855,13 +850,13 @@ class MDODiscipline(Serializable):
             TypeError: When the input data are not passed as a dictionary.
         """
         if input_data is None:
-            return deepcopy(self.default_inputs)
+            return deepcopy(DisciplineData(self.default_inputs))
 
         if not isinstance(input_data, collections.abc.Mapping):
             msg = f"Input data must be of dict type, got {type(input_data)} instead."
             raise TypeError(msg)
 
-        full_input_data = DisciplineData({})
+        full_input_data = DisciplineData()
         for input_name in self.input_grammar:
             input_value = input_data.get(input_name)
             if input_value is not None:
@@ -950,7 +945,7 @@ class MDODiscipline(Serializable):
 
     def execute(
         self,
-        input_data: Mapping[str, Any] | None = None,
+        input_data: StrKeyMapping | None = None,
     ) -> DisciplineData:
         """Execute the discipline.
 
@@ -1088,7 +1083,9 @@ class MDODiscipline(Serializable):
         out_names = self.get_output_data_names()
 
         if out_names:
-            outputs_for_cache = self._local_data.copy(keys=out_names)
+            outputs_for_cache = self._local_data.copy()
+            for name in outputs_for_cache.keys() - out_names:
+                del outputs_for_cache[name]
 
             # Non simple caches require NumPy arrays.
             if not isinstance(self.cache, SimpleCache):
@@ -1202,10 +1199,10 @@ class MDODiscipline(Serializable):
 
     def linearize(
         self,
-        input_data: Mapping[str, Any] | None = None,
+        input_data: StrKeyMapping | None = None,
         compute_all_jacobians: bool = False,
         execute: bool = True,
-    ) -> Mapping[str, Mapping[str, NDArray[float]]]:
+    ) -> JacobianData:
         """Compute the Jacobians of some outputs with respect to some inputs.
 
         Args:
@@ -1547,7 +1544,7 @@ class MDODiscipline(Serializable):
         return self.input_grammar.defaults
 
     @default_inputs.setter
-    def default_inputs(self, data: Mapping[str, Any]) -> None:
+    def default_inputs(self, data: StrKeyMapping) -> None:
         self.input_grammar.defaults = data
 
     @property
@@ -1556,7 +1553,7 @@ class MDODiscipline(Serializable):
         return self.output_grammar.defaults
 
     @default_outputs.setter
-    def default_outputs(self, data: Mapping[str, Any]) -> None:
+    def default_outputs(self, data: StrKeyMapping) -> None:
         self.output_grammar.defaults = data
 
     def add_namespace_to_input(self, name: str, namespace: str) -> None:
@@ -1842,9 +1839,17 @@ class MDODiscipline(Serializable):
         """
         return self._status
 
+    @status.setter
+    def status(
+        self,
+        status: ExecutionStatus,
+    ) -> None:
+        self._status = status
+        self.notify_status_observers()
+
     def set_disciplines_statuses(
         self,
-        status: str,
+        status: ExecutionStatus,
     ) -> None:
         """Set the sub-disciplines statuses.
 
@@ -1937,14 +1942,6 @@ class MDODiscipline(Serializable):
             raise ValueError(msg)
         self.status = self.ExecutionStatus.PENDING
 
-    @status.setter
-    def status(
-        self,
-        status: ExecutionStatus,
-    ) -> None:
-        self._status = status
-        self.notify_status_observers()
-
     def add_status_observer(
         self,
         obs: Any,
@@ -1999,7 +1996,7 @@ class MDODiscipline(Serializable):
 
     def check_input_data(
         self,
-        input_data: Mapping[str, Any],
+        input_data: StrKeyMapping,
         raise_exception: bool = True,
     ) -> None:
         """Check the input data validity.
@@ -2151,6 +2148,27 @@ class MDODiscipline(Serializable):
         """
         return self.get_outputs_by_name(self.get_output_data_names())
 
+    def __get_data(self, with_namespaces: bool, grammar: BaseGrammar) -> dict[str, Any]:
+        """Return the local data restricted to the items in a grammar.
+
+        Args:
+            with_namespaces: Whether to keep the namespace prefix of the
+                output names, if any.
+            grammar: The grammar that provides the names to be restricted to.
+
+        Returns:
+            The local output data.
+        """
+        copy_ = self._local_data.copy()
+        for name in copy_.keys() - grammar.keys():
+            del copy_[name]
+
+        if not with_namespaces and grammar.to_namespaced:
+            for key in tuple(copy_.keys()):
+                copy_[key.rsplit(namespaces_separator, 1)[-1]] = copy_.pop(key)
+
+        return copy_
+
     def get_output_data(self, with_namespaces: bool = True) -> dict[str, Any]:
         """Return the local output data as a dictionary.
 
@@ -2161,10 +2179,7 @@ class MDODiscipline(Serializable):
         Returns:
             The local output data.
         """
-        return self._local_data.copy(
-            keys=self.output_grammar.keys(),
-            with_namespace=with_namespaces or not self.output_grammar.to_namespaced,
-        )
+        return self.__get_data(with_namespaces, self.output_grammar)
 
     def get_input_data(self, with_namespaces: bool = True) -> dict[str, Any]:
         """Return the local input data as a dictionary.
@@ -2176,10 +2191,7 @@ class MDODiscipline(Serializable):
         Returns:
             The local input data.
         """
-        return self._local_data.copy(
-            keys=self.input_grammar.keys(),
-            with_namespace=with_namespaces or not self.input_grammar.to_namespaced,
-        )
+        return self.__get_data(with_namespaces, self.input_grammar)
 
     def to_pickle(self, file_path: str | Path) -> None:
         """Serialize the discipline and store it in a file.
@@ -2207,7 +2219,7 @@ class MDODiscipline(Serializable):
 
     def __setstate__(
         self,
-        state: Mapping[str, Any],
+        state: StrKeyMapping,
     ) -> None:
         super().__setstate__(state)
         # Initialize the attributes that are not serializable nor Synchronized last.

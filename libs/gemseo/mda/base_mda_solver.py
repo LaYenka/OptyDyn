@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING
-from typing import Any
 
 from numpy import abs
 from numpy import array
@@ -29,21 +28,21 @@ from numpy.linalg import norm
 
 from gemseo.algos.sequence_transformer.acceleration import AccelerationMethod
 from gemseo.core.discipline import MDODiscipline
-from gemseo.mda.mda import MDA
+from gemseo.mda.base_mda import BaseMDA
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from collections.abc import Mapping
     from collections.abc import Sequence
 
     from gemseo.core.coupling_structure import MDOCouplingStructure
     from gemseo.core.data_converters.base import BaseDataConverter
     from gemseo.core.discipline_data import DisciplineData
+    from gemseo.typing import StrKeyMapping
 
 LOGGER = logging.getLogger(__name__)
 
 
-class BaseMDASolver(MDA):
+class BaseMDASolver(BaseMDA):
     """The base class for MDA solvers."""
 
     __resolved_variable_names_to_slices: dict[BaseDataConverter, dict[str, slice]]
@@ -83,7 +82,7 @@ class BaseMDASolver(MDA):
         self,
         disciplines: Sequence[MDODiscipline],
         max_mda_iter: int = 10,
-        name: str | None = None,
+        name: str = "",
         grammar_type: MDODiscipline.GrammarType = MDODiscipline.GrammarType.JSON,
         tolerance: float = 1e-6,
         linear_solver_tolerance: float = 1e-12,
@@ -92,7 +91,7 @@ class BaseMDASolver(MDA):
         coupling_structure: MDOCouplingStructure | None = None,
         log_convergence: bool = False,
         linear_solver: str = "DEFAULT",
-        linear_solver_options: Mapping[str, Any] | None = None,
+        linear_solver_options: StrKeyMapping | None = None,
         acceleration_method: AccelerationMethod = AccelerationMethod.NONE,
         over_relaxation_factor: float = 1.0,
     ) -> None:

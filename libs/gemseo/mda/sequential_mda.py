@@ -23,26 +23,25 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from gemseo.core.discipline import MDODiscipline
+from gemseo.mda.base_mda import BaseMDA
 from gemseo.mda.gauss_seidel import MDAGaussSeidel
-from gemseo.mda.mda import MDA
 from gemseo.mda.newton_raphson import MDANewtonRaphson
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
     from collections.abc import Sequence
-    from typing import Any
 
     from gemseo.core.coupling_structure import MDOCouplingStructure
+    from gemseo.typing import StrKeyMapping
 
 
-class MDASequential(MDA):
+class MDASequential(BaseMDA):
     """A sequence of elementary MDAs."""
 
     def __init__(
         self,
         disciplines: Sequence[MDODiscipline],
-        mda_sequence: Sequence[MDA],
-        name: str | None = None,
+        mda_sequence: Sequence[BaseMDA],
+        name: str = "",
         grammar_type: MDODiscipline.GrammarType = MDODiscipline.GrammarType.JSON,
         max_mda_iter: int = 10,
         tolerance: float = 1e-6,
@@ -51,7 +50,7 @@ class MDASequential(MDA):
         use_lu_fact: bool = False,
         coupling_structure: MDOCouplingStructure | None = None,
         linear_solver: str = "DEFAULT",
-        linear_solver_options: Mapping[str, Any] | None = None,
+        linear_solver_options: StrKeyMapping | None = None,
     ) -> None:
         """
         Args:
@@ -70,14 +69,14 @@ class MDASequential(MDA):
             linear_solver=linear_solver,
             linear_solver_options=linear_solver_options,
         )
-        self._compute_input_couplings()
+        self._compute_input_coupling_names()
 
         self.mda_sequence = mda_sequence
         for mda in self.mda_sequence:
             mda.reset_history_each_run = True
             self._log_convergence = self._log_convergence or mda.log_convergence
 
-    @MDA.log_convergence.setter
+    @BaseMDA.log_convergence.setter
     def log_convergence(self, value: bool) -> None:  # noqa: D102
         self._log_convergence = value
         for mda in self.mda_sequence:
@@ -109,7 +108,7 @@ class MDAGSNewton(MDASequential):
     def __init__(
         self,
         disciplines: Sequence[MDODiscipline],
-        name: str | None = None,
+        name: str = "",
         grammar_type: MDODiscipline.GrammarType = MDODiscipline.GrammarType.JSON,
         tolerance: float = 1e-6,
         max_mda_iter: int = 10,
@@ -120,7 +119,7 @@ class MDAGSNewton(MDASequential):
         warm_start: bool = False,
         use_lu_fact: bool = False,
         coupling_structure: MDOCouplingStructure | None = None,
-        linear_solver_options: Mapping[str, Any] | None = None,
+        linear_solver_options: StrKeyMapping | None = None,
         log_convergence: bool = False,
         **newton_mda_options: float | str | None,
     ) -> None:

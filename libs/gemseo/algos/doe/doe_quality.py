@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-from collections import namedtuple
 from operator import ge
 from operator import gt
 from operator import le
@@ -26,6 +25,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 from typing import Final
 from typing import Literal
+from typing import NamedTuple
 
 from scipy.spatial import distance
 from scipy.stats import qmc
@@ -34,22 +34,28 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from numbers import Real
 
-    from numpy import ndarray
+    from gemseo.typing import RealArray
+
 
 __EUCLIDEAN: Final[str] = "euclidean"
 _DEFAULT_DISCREPANCY_TYPE_NAME: Final[str] = "CD"
 _DEFAULT_POWER: Final[int] = 50
 
 
-DOEMeasures = namedtuple("DOEMeasures", ["discrepancy", "mindist", "phip"])
-r"""The quality measures of a DOE.
+class DOEMeasures(NamedTuple):
+    r"""The quality measures of a DOE.
 
-Namely :math:`\phi^p`, minimum-distance and discrepancy measures,
-accessible with the attributes ``discrepancy``, ``mindist`` and ``phip``.
+    Namely :math:`\phi^p`, minimum-distance and discrepancy measures,
+    accessible with the attributes ``discrepancy``, ``mindist`` and ``phip``.
 
-The smaller the quality measures, the better,
-except for the minimum-distance criterion for which the larger it is the better.
-"""
+    The smaller the quality measures, the better,
+    except for the minimum-distance criterion for which the larger it is the better.
+    """
+
+    discrepancy: float
+    mindist: float
+    phip: float
+
 
 _measure_transformations: tuple[Callable[[float], float]] = (
     lambda x: x,
@@ -69,7 +75,7 @@ class DOEQuality:
 
     def __init__(
         self,
-        samples: ndarray,
+        samples: RealArray,
         power: int = _DEFAULT_POWER,
         discrepancy_type_name: DiscrepancyTypeNameType = _DEFAULT_DISCREPANCY_TYPE_NAME,
         **discrepancy_options: Any,
@@ -136,7 +142,7 @@ class DOEQuality:
         )
 
 
-def compute_mindist_criterion(samples: ndarray) -> float:
+def compute_mindist_criterion(samples: RealArray) -> float:
     """Compute the minimum-distance criterion of a sample set (the higher, the better).
 
     This criterion is also called *mindist*.
@@ -151,7 +157,7 @@ def compute_mindist_criterion(samples: ndarray) -> float:
 
 
 def compute_discrepancy(
-    samples: ndarray,
+    samples: RealArray,
     type_name: DiscrepancyTypeNameType = _DEFAULT_DISCREPANCY_TYPE_NAME,
     **options: Any,
 ) -> float:
@@ -168,7 +174,7 @@ def compute_discrepancy(
     return qmc.discrepancy(samples, method=type_name, **options)
 
 
-def compute_phip_criterion(samples: ndarray, power: float = _DEFAULT_POWER) -> float:
+def compute_phip_criterion(samples: RealArray, power: float = _DEFAULT_POWER) -> float:
     r"""Compute the math:`\phi^p` criterion of a sample set (the smaller, the better).
 
     See :cite:`morris1995`.

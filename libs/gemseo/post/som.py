@@ -47,7 +47,7 @@ from gemseo.post.opt_post_processor import OptPostProcessor
 from gemseo.third_party import sompy
 
 if TYPE_CHECKING:
-    from gemseo.algos.opt_problem import OptimizationProblem
+    from gemseo.algos.optimization_problem import OptimizationProblem
 
 LOGGER = logging.getLogger(__name__)
 
@@ -114,12 +114,12 @@ class SOM(OptPostProcessor):
             annotate: If ``True``, add label of neuron value to SOM plot.
         """  # noqa: D205, D212, D415
         criteria = [
-            self.opt_problem.get_objective_name(),
-            *self.opt_problem.get_constraint_names(),
+            self.optimization_problem.standardized_objective_name,
+            *self.optimization_problem.constraints.get_names(),
         ]
         all_data = self.database.get_function_names()
         # Ensure that the data is available in the database
-        for criterion in criteria:
+        for criterion in tuple(criteria):
             if criterion not in all_data:
                 criteria.remove(criterion)
         figure = plt.figure(figsize=self.DEFAULT_FIG_SIZE)

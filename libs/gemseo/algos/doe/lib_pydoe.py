@@ -21,97 +21,85 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from typing import ClassVar
 from typing import Optional
 from typing import Union
 
-import pyDOE2 as pyDOE
-from numpy import ndarray
 from numpy.random import RandomState
+from pyDOE3.doe_box_behnken import bbdesign
+from pyDOE3.doe_composite import ccdesign
+from pyDOE3.doe_factorial import ff2n
+from pyDOE3.doe_lhs import lhs
+from pyDOE3.doe_plackett_burman import pbdesign
 
 from gemseo.algos._unsuitability_reason import _UnsuitabilityReason
-from gemseo.algos.doe.doe_library import DOEAlgorithmDescription
-from gemseo.algos.doe.doe_library import DOELibrary
+from gemseo.algos.doe.base_doe_library import BaseDOELibrary
+from gemseo.algos.doe.base_doe_library import DOEAlgorithmDescription
 from gemseo.algos.doe.pydoe_full_factorial_doe import PyDOEFullFactorialDOE
+from gemseo.typing import RealArray
 
 if TYPE_CHECKING:
-    from gemseo.algos.opt_problem import OptimizationProblem
+    from gemseo.algos.design_space import DesignSpace
+    from gemseo.algos.optimization_problem import OptimizationProblem
+    from gemseo.core.parallel_execution.callable_parallel_execution import CallbackType
 
 OptionType = Optional[
-    Union[str, int, float, bool, Sequence[int], tuple[int, int], ndarray]
+    Union[str, int, float, bool, Sequence[int], tuple[int, int], RealArray]
 ]
 
 
-class PyDOE(DOELibrary):
-    """PyDOE optimization library interface See DOELibrary."""
+class PyDOE(BaseDOELibrary):
+    """PyDOE optimization library interface See BaseDOELibrary."""
 
-    # Available designs
-    PYDOE_DOC = "https://pythonhosted.org/pyDOE/"
-    PYDOE_LHS = "lhs"
-    PYDOE_LHS_DESC = "Latin Hypercube Sampling implemented in pyDOE"
-    PYDOE_LHS_WEB = PYDOE_DOC + "randomized.html#latin-hypercube"
-    PYDOE_2LEVELFACT = "ff2n"
-    PYDOE_2LEVELFACT_DESC = "2-Level Full-Factorial implemented in pyDOE"
-    PYDOE_2LEVELFACT_WEB = PYDOE_DOC + "factorial.html#level-full-factorial"
-    PYDOE_FULLFACT = "fullfact"
-    PYDOE_FULLFACT_DESC = "Full-Factorial implemented in pyDOE"
-    PYDOE_FULLFACT_WEB = PYDOE_DOC + "factorial.html#general-full-factorial"
-    PYDOE_PBDESIGN = "pbdesign"
-    PYDOE_PBDESIGN_DESC = "Plackett-Burman design implemented in pyDOE"
-    PYDOE_PBDESIGN_WEB = PYDOE_DOC + "factorial.html#plackett-burman"
-    PYDOE_BBDESIGN = "bbdesign"
-    PYDOE_BBDESIGN_DESC = "Box-Behnken design implemented in pyDOE"
-    PYDOE_BBDESIGN_WEB = PYDOE_DOC + "rsm.html#box-behnken"
-    PYDOE_CCDESIGN = "ccdesign"
-    PYDOE_CCDESIGN_DESC = "Central Composite implemented in pyDOE"
-    PYDOE_CCDESIGN_WEB = PYDOE_DOC + "rsm.html#central-composite"
-    ALGO_LIST: ClassVar[list[str]] = [
-        PYDOE_FULLFACT,
-        PYDOE_2LEVELFACT,
-        PYDOE_PBDESIGN,
-        PYDOE_BBDESIGN,
-        PYDOE_CCDESIGN,
-        PYDOE_LHS,
-    ]
-    DESC_LIST: ClassVar[list[str]] = [
-        PYDOE_FULLFACT_DESC,
-        PYDOE_2LEVELFACT_DESC,
-        PYDOE_PBDESIGN_DESC,
-        PYDOE_BBDESIGN_DESC,
-        PYDOE_CCDESIGN_DESC,
-        PYDOE_LHS_DESC,
-    ]
-    WEB_LIST: ClassVar[list[str]] = [
-        PYDOE_FULLFACT_WEB,
-        PYDOE_2LEVELFACT_WEB,
-        PYDOE_PBDESIGN_WEB,
-        PYDOE_BBDESIGN_WEB,
-        PYDOE_CCDESIGN_WEB,
-        PYDOE_LHS_WEB,
-    ]
-    CRITERION_KEYWORD = "criterion"
-    ITERATION_KEYWORD = "iterations"
-    ALPHA_KEYWORD = "alpha"
-    FACE_KEYWORD = "face"
-    CENTER_BB_KEYWORD = "center_bb"
-    CENTER_CC_KEYWORD = "center_cc"
-    LIBRARY_NAME = "PyDOE"
-
-    def __init__(self) -> None:  # noqa:D107
-        super().__init__()
-        for idx, algo in enumerate(self.ALGO_LIST):
-            self.descriptions[algo] = DOEAlgorithmDescription(
-                algorithm_name=algo,
-                description=self.DESC_LIST[idx],
-                internal_algorithm_name=algo,
-                library_name=self.__class__.__name__,
-                website=self.WEB_LIST[idx],
-            )
-
-        self.descriptions["bbdesign"].minimum_dimension = 3
-        self.descriptions["ccdesign"].minimum_dimension = 2
+    ALGORITHM_INFOS: ClassVar[dict[str, DOEAlgorithmDescription]] = {
+        "fullfact": DOEAlgorithmDescription(
+            algorithm_name="fullfact",
+            description="Full-Factorial",
+            internal_algorithm_name="fullfact",
+            library_name="PyDOE",
+            website="https://pythonhosted.org/pyDOE/factorial.html#general-full-factorial",
+        ),
+        "ff2n": DOEAlgorithmDescription(
+            algorithm_name="ff2n",
+            description="2-Level Full-Factorial",
+            internal_algorithm_name="ff2n",
+            library_name="PyDOE",
+            website="https://pythonhosted.org/pyDOE/factorial.html#level-full-factorial",
+        ),
+        "pbdesign": DOEAlgorithmDescription(
+            algorithm_name="pbdesign",
+            description="Plackett-Burman design",
+            internal_algorithm_name="pbdesign",
+            library_name="PyDOE",
+            website="https://pythonhosted.org/pyDOE/factorial.html#plackett-burman",
+        ),
+        "bbdesign": DOEAlgorithmDescription(
+            algorithm_name="bbdesign",
+            description="Box-Behnken design",
+            internal_algorithm_name="bbdesign",
+            library_name="PyDOE",
+            website="https://pythonhosted.org/pyDOE/rsm.html#box-behnken",
+        ),
+        "ccdesign": DOEAlgorithmDescription(
+            algorithm_name="ccdesign",
+            description="Central Composite",
+            internal_algorithm_name="ccdesign",
+            library_name="PyDOE",
+            website="https://pythonhosted.org/pyDOE/rsm.html#central-composite",
+        ),
+        "lhs": DOEAlgorithmDescription(
+            algorithm_name="lhs",
+            description="Latin Hypercube Sampling",
+            internal_algorithm_name="lhs",
+            library_name="PyDOE",
+            website="https://pythonhosted.org/pyDOE/randomized.html#latin-hypercube",
+        ),
+    }
+    ALGORITHM_INFOS["bbdesign"].minimum_dimension = 3
+    ALGORITHM_INFOS["ccdesign"].minimum_dimension = 2
 
     def _get_options(
         self,
@@ -128,6 +116,7 @@ class PyDOE(DOELibrary):
         wait_time_between_samples: float = 0.0,
         seed: int | None = None,
         max_time: float = 0,
+        callbacks: Iterable[CallbackType] = (),
         **kwargs: OptionType,
     ) -> dict[str, OptionType]:  # pylint: disable=W0221
         """Set the options.
@@ -155,11 +144,12 @@ class PyDOE(DOELibrary):
             n_processes: The maximum simultaneous number of processes
                 used to parallelize the execution.
             wait_time_between_samples: The waiting time between two samples.
-            seed: The seed value.
-                If ``None``,
-                use the seed of the library,
-                namely :attr:`.PyDOE.seed`.
+            seed: The seed used for reproducibility reasons.
+                If ``None``, use :attr:`.seed`.
             max_time: The maximum runtime in seconds, disabled if 0.
+            callbacks: The functions to be evaluated
+                after each call to :meth:`.OptimizationProblem.evaluate_functions`;
+                to be called as ``callback(index, (output, jacobian))``.
             **kwargs: The additional arguments.
 
         Returns:
@@ -181,13 +171,14 @@ class PyDOE(DOELibrary):
             wait_time_between_samples=wait_time_between_samples,
             seed=seed,
             max_time=max_time,
+            callbacks=callbacks,
             **kwargs,
         )
 
     @staticmethod
     def __translate(
-        result: ndarray,
-    ) -> ndarray:
+        result: RealArray,
+    ) -> RealArray:
         """Translate the DOE design variables to [0,1].
 
         Args:
@@ -198,61 +189,54 @@ class PyDOE(DOELibrary):
         """
         return (result + 1.0) * 0.5
 
-    def _generate_samples(self, **options: OptionType) -> ndarray:
-        """Generate the samples for the DOE.
-
-        Args:
-            **options: The options for the algorithm,
-                see the associated JSON file.
-
-        Returns:
-            The samples for the DOE.
-        """
-        if self.algo_name == self.PYDOE_LHS:
-            seed = options[self.SEED]
-            return pyDOE.lhs(
-                options[self.DIMENSION],
-                random_state=RandomState(self._get_seed(seed)),
-                samples=options["n_samples"],
-                criterion=options.get(self.CRITERION_KEYWORD),
-                iterations=options.get(self.ITERATION_KEYWORD),
+    def _generate_unit_samples(
+        self, design_space: DesignSpace, **options: OptionType
+    ) -> RealArray:
+        if self._algo_name == "lhs":
+            return lhs(
+                design_space.dimension,
+                random_state=RandomState(self._seeder.get_seed(options[self._SEED])),
+                samples=options[self._N_SAMPLES],
+                criterion=options.get("criterion"),
+                iterations=options.get("iterations"),
             )
 
-        if self.algo_name == self.PYDOE_CCDESIGN:
+        if self._algo_name == "ccdesign":
             return self.__translate(
-                pyDOE.ccdesign(
-                    options[self.DIMENSION],
-                    center=options[self.CENTER_CC_KEYWORD],
-                    alpha=options[self.ALPHA_KEYWORD],
-                    face=options[self.FACE_KEYWORD],
+                ccdesign(
+                    design_space.dimension,
+                    center=options["center_cc"],
+                    alpha=options["alpha"],
+                    face=options["face"],
                 )
             )
 
-        if self.algo_name == self.PYDOE_BBDESIGN:
+        if self._algo_name == "bbdesign":
             # Initially designed for quadratic model fitting
             # center point is can be run several times to allow for a more
             # uniform estimate of the prediction variance over the
             # entire design space. Default value of center depends on dv_size
             return self.__translate(
-                pyDOE.bbdesign(
-                    options[self.DIMENSION], center=options.get(self.CENTER_BB_KEYWORD)
+                bbdesign(
+                    design_space.dimension,
+                    center=options.get("center_bb"),
                 )
             )
 
-        if self.algo_name == self.PYDOE_FULLFACT:
+        if self._algo_name == "fullfact":
             return PyDOEFullFactorialDOE().generate_samples(
-                options.pop(self.N_SAMPLES),
-                options.pop(self.DIMENSION),
+                options.pop(self._N_SAMPLES),
+                design_space.dimension,
                 **options,
             )
 
-        if self.algo_name == self.PYDOE_2LEVELFACT:
-            return self.__translate(pyDOE.ff2n(options[self.DIMENSION]))
+        if self._algo_name == "ff2n":
+            return self.__translate(ff2n(design_space.dimension))
 
-        if self.algo_name == self.PYDOE_PBDESIGN:
-            return self.__translate(pyDOE.pbdesign(options[self.DIMENSION]))
+        if self._algo_name == "pbdesign":
+            return self.__translate(pbdesign(design_space.dimension))
 
-        msg = f"Bad algo_name: {self.algo_name}"
+        msg = f"Bad algo_name: {self._algo_name}"
         raise ValueError(msg)
 
     @classmethod
@@ -262,7 +246,10 @@ class PyDOE(DOELibrary):
         problem: OptimizationProblem,
     ) -> _UnsuitabilityReason:
         reason = super()._get_unsuitability_reason(algorithm_description, problem)
-        if reason or problem.dimension >= algorithm_description.minimum_dimension:
+        if (
+            reason
+            or problem.design_space.dimension >= algorithm_description.minimum_dimension
+        ):
             return reason
 
         return _UnsuitabilityReason.SMALL_DIMENSION

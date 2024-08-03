@@ -34,7 +34,10 @@ if TYPE_CHECKING:
 
 _ExecutionStatus = MDODiscipline.ExecutionStatus
 
+# TODO: API: split this module.
 
+
+# TODO: API: rename to BaseExecutionSequence
 class ExecutionSequence(metaclass=ABCGoogleDocstringInheritanceMeta):
     """A base class for execution sequences.
 
@@ -47,6 +50,7 @@ class ExecutionSequence(metaclass=ABCGoogleDocstringInheritanceMeta):
     START_STR = "["
     END_STR = "]"
 
+    # TODO: API: remove unused arg
     def __init__(self, sequence=None) -> None:
         """
         Args:
@@ -81,6 +85,7 @@ class ExecutionSequence(metaclass=ABCGoogleDocstringInheritanceMeta):
             The disciplines.
         """
 
+    # TODO: API: remove useless property
     @property
     def status(self):
         """Get the value of the status.
@@ -128,6 +133,7 @@ class ExecutionSequence(metaclass=ABCGoogleDocstringInheritanceMeta):
             raise RuntimeError(msg)
         self._parent = parent
 
+    # TODO: API: make a property
     def enabled(self) -> bool:
         """Get activation state.
 
@@ -332,7 +338,7 @@ class CompositeExecSequence(ExecutionSequence):
         for sequence in self.sequences:
             sequence.force_statuses(status)
 
-    def get_statuses(self):
+    def get_statuses(self) -> dict[str, str]:
         """Get the dictionary of statuses mapping atom uuid to status.
 
         Returns:
@@ -644,8 +650,9 @@ class LoopExecSequence(CompositeExecSequence):
             self.status = _ExecutionStatus.FAILED
 
 
+# TODO: API: harmonize with other factories.
 class ExecutionSequenceFactory:
-    """A factory class for ExecutionSequence objects.
+    """A factory of ExecutionSequence objects.
 
     Allow to create AtomicExecutionSequence, SerialExecutionSequence,
     ParallelExecutionSequence and LoopExecutionSequence. Main |g| workflow is intended
@@ -657,7 +664,7 @@ class ExecutionSequenceFactory:
         """Return a structure representing the execution of a discipline.
 
         This function
-        is intended to be called by MDOFormulation.get_expected_workflow methods.
+        is intended to be called by BaseMDOFormulation.get_expected_workflow methods.
 
         Args:
             discipline: A discipline.
@@ -671,8 +678,8 @@ class ExecutionSequenceFactory:
     def serial(sequence=None) -> SerialExecSequence:
         """Return a structure representing the serial execution of disciplines.
 
-        This function is intended to be called by MDOFormulation.get_expected_workflow
-        methods.
+        This function is intended to be called
+        by BaseMDOFormulation.get_expected_workflow methods.
 
         Args:
             sequence: Any number of discipline
@@ -687,8 +694,8 @@ class ExecutionSequenceFactory:
     def parallel(sequence=None) -> ParallelExecSequence:
         """Return a structure representing the parallel execution of disciplines.
 
-        This function is intended to be called by MDOFormulation.get_expected_workflow
-        methods.
+        This function is intended to be called
+        by BaseMDOFormulation.get_expected_workflow methods.
 
         Args:
             sequence: Any number of discipline or
@@ -703,7 +710,7 @@ class ExecutionSequenceFactory:
     def loop(control, composite_sequence) -> LoopExecSequence:
         """Return a structure representing a loop execution of a function.
 
-        It is intended to be called by MDOFormulation.get_expected_workflow methods.
+        It is intended to be called by BaseMDOFormulation.get_expected_workflow methods.
 
         Args:
             control: The discipline object, controller of the loop.

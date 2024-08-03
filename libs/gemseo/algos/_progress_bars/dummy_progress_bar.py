@@ -30,9 +30,9 @@ class DummyProgressBar(BaseProgressBar):
     .. warning:: This progress bar is inactive.
     """
 
-    def set_objective_value(  # noqa D102
+    def set_objective_value(  # noqa: D102
         self, x_vect: ndarray | None, current_iter_must_not_be_logged: bool = False
     ) -> None: ...
 
-    def finalize_iter_observer(self) -> None:  # noqa D102
+    def finalize_iter_observer(self) -> None:  # noqa: D102
         ...

@@ -50,21 +50,21 @@ from __future__ import annotations
 from itertools import product
 from typing import TYPE_CHECKING
 
+from gemseo.mlearning.core.algos.factory import MLAlgoFactory
 from gemseo.mlearning.core.calibration import MLAlgoCalibration
-from gemseo.mlearning.core.factory import MLAlgoFactory
-from gemseo.mlearning.quality_measures.quality_measure import MLQualityMeasure
-from gemseo.mlearning.quality_measures.quality_measure import MLQualityMeasureFactory
-from gemseo.mlearning.quality_measures.quality_measure import (
+from gemseo.mlearning.core.quality.base_ml_algo_quality import BaseMLAlgoQuality
+from gemseo.mlearning.core.quality.base_ml_algo_quality import (
     OptionType as MeasureOptionType,
 )
+from gemseo.mlearning.core.quality.factory import MLAlgoQualityFactory
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from gemseo.algos.design_space import DesignSpace
-    from gemseo.core.scenario import ScenarioInputDataType
     from gemseo.datasets.dataset import Dataset
-    from gemseo.mlearning.core.ml_algo import MLAlgo
+    from gemseo.mlearning.core.algos.ml_algo import BaseMLAlgo
+    from gemseo.scenarios.scenario import ScenarioInputDataType
 
 
 class MLAlgoSelection:
@@ -73,7 +73,7 @@ class MLAlgoSelection:
     dataset: Dataset
     """The learning dataset."""
 
-    measure: str
+    measure: type[BaseMLAlgoQuality]
     """The name of a quality measure to measure the quality of the machine learning
     algorithms."""
 
@@ -83,15 +83,15 @@ class MLAlgoSelection:
     factory: MLAlgoFactory
     """The factory used for the instantiation of machine learning algorithms."""
 
-    candidates: list[tuple[MLAlgo, float]]
+    candidates: list[tuple[BaseMLAlgo, float]]
     """The candidate machine learning algorithms, after possible calibration, and their
     quality measures."""
 
     def __init__(
         self,
         dataset: Dataset,
-        measure: str | MLQualityMeasure,
-        measure_evaluation_method_name: MLQualityMeasure.EvaluationMethod = MLQualityMeasure.EvaluationMethod.LEARN,  # noqa: E501
+        measure: str | type[BaseMLAlgoQuality],
+        measure_evaluation_method_name: BaseMLAlgoQuality.EvaluationMethod = BaseMLAlgoQuality.EvaluationMethod.LEARN,  # noqa: E501
         samples: Sequence[int] | None = None,
         **measure_options: MeasureOptionType,
     ) -> None:
@@ -114,7 +114,7 @@ class MLAlgoSelection:
         """  # noqa: D205 D212
         self.dataset = dataset
         if isinstance(measure, str):
-            self.measure = MLQualityMeasureFactory().get_class(measure)
+            self.measure = MLAlgoQualityFactory().get_class(measure)
         else:
             self.measure = measure
 
@@ -210,7 +210,7 @@ class MLAlgoSelection:
     def select(
         self,
         return_quality: bool = False,
-    ) -> MLAlgo | tuple[MLAlgo, float]:
+    ) -> BaseMLAlgo | tuple[BaseMLAlgo, float]:
         """Select the best model.
 
         The model is chosen through a grid search

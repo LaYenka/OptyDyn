@@ -48,7 +48,7 @@ This sub-package is based in particular on OpenTURNS.
 The sub-package :mod:`~gemseo.uncertainty.statistics` offers an abstract level
 for statistics, as well as parametric and empirical versions.
 Empirical statistics are estimated from a :class:`.Dataset`
-while parametric statistics are analytical properties of a :class:`.Distribution`
+while parametric statistics are analytical properties of a :class:`.BaseDistribution`
 fitted from a :class:`.Dataset`.
 
 .. seealso::
@@ -62,25 +62,25 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Collection
     from collections.abc import Iterable
     from collections.abc import Sequence
     from pathlib import Path
 
-    from gemseo.algos.parameter_space import ParameterSpace
-    from gemseo.core.discipline import MDODiscipline
     from gemseo.datasets.dataset import Dataset
-    from gemseo.uncertainty.distributions.distribution import Distribution
-    from gemseo.uncertainty.sensitivity.analysis import SensitivityAnalysis
-    from gemseo.uncertainty.statistics.statistics import Statistics
+    from gemseo.datasets.io_dataset import IODataset
+    from gemseo.uncertainty.distributions.base_distribution import BaseDistribution
+    from gemseo.uncertainty.sensitivity.base_sensitivity_analysis import (
+        BaseSensitivityAnalysis,
+    )
+    from gemseo.uncertainty.statistics.base_statistics import BaseStatistics
 
 
-def get_available_distributions(base_class_name: str = "Distribution") -> list[str]:
+def get_available_distributions(base_class_name: str = "BaseDistribution") -> list[str]:
     """Get the available probability distributions.
 
     Args:
         base_class_name: The name of the base class of the probability distributions,
-            e.g. ``"Distribution"``, ``"OTDistribution"`` or ``"SPDistribution"``.
+            e.g. ``"BaseDistribution"``, ``"OTDistribution"`` or ``"SPDistribution"``.
 
     Returns:
         The names of the available probability distributions.
@@ -89,7 +89,7 @@ def get_available_distributions(base_class_name: str = "Distribution") -> list[s
 
     factory = DistributionFactory()
     class_names = factory.class_names
-    if base_class_name == "Distribution":
+    if base_class_name == "BaseDistribution":
         return class_names
 
     return [
@@ -101,49 +101,40 @@ def get_available_distributions(base_class_name: str = "Distribution") -> list[s
 
 
 def create_distribution(
-    variable: str,
     distribution_name: str,
-    dimension: int = 1,
     **options,
-) -> Distribution:
+) -> BaseDistribution:
     """Create a distribution.
 
     Args:
-        variable: The name of the random variable.
         distribution_name: The name of a class
             implementing a probability distribution,
             e.g. 'OTUniformDistribution' or 'SPDistribution'.
-        dimension: The dimension of the random variable.
         **options: The distribution options.
 
     Examples:
         >>> from gemseo.uncertainty import create_distribution
         >>>
-        >>> distribution = create_distribution(
-        ...     "x", "OTNormalDistribution", dimension=2, mu=1, sigma=2
-        ... )
+        >>> distribution = create_distribution("OTNormalDistribution", mu=1, sigma=2)
         >>> print(distribution)
         Normal(mu=1, sigma=2)
         >>> print(distribution.mean, distribution.standard_deviation)
-        [1. 1.] [2. 2.]
+        1.0 2.0
         >>> samples = distribution.compute_samples(10)
         >>> print(samples.shape)
-        (10, 2)
+        (10,)
     """
     from gemseo.uncertainty.distributions.factory import DistributionFactory
 
     factory = DistributionFactory()
-    return factory.create(
-        distribution_name, variable=variable, dimension=dimension, **options
-    )
+    return factory.create(distribution_name, **options)
 
 
 def get_available_sensitivity_analyses() -> list[str]:
     """Get the available sensitivity analyses."""
     from gemseo.uncertainty.sensitivity.factory import SensitivityAnalysisFactory
 
-    factory = SensitivityAnalysisFactory()
-    return factory.available_sensitivity_analyses
+    return SensitivityAnalysisFactory().class_names
 
 
 def create_statistics(
@@ -154,7 +145,7 @@ def create_statistics(
     selection_criterion: str = "best",
     level: float = 0.05,
     name: str | None = None,
-) -> Statistics:
+) -> BaseStatistics:
     """Create a statistics toolbox, either parametric or empirical.
 
     If parametric, the toolbox selects a distribution from candidates,
@@ -218,15 +209,13 @@ def create_statistics(
         >>> statistics = create_statistics(dataset)
         >>> mean = statistics.compute_mean()
     """
-    from gemseo.uncertainty.statistics.empirical import EmpiricalStatistics as EmpStats
-    from gemseo.uncertainty.statistics.parametric import (
-        ParametricStatistics as ParamStats,
-    )
+    from gemseo.uncertainty.statistics.empirical_statistics import EmpiricalStatistics
+    from gemseo.uncertainty.statistics.parametric_statistics import ParametricStatistics
 
     if tested_distributions is None:
-        statistical_analysis = EmpStats(dataset, variable_names, name)
+        statistical_analysis = EmpiricalStatistics(dataset, variable_names, name)
     else:
-        statistical_analysis = ParamStats(
+        statistical_analysis = ParametricStatistics(
             dataset,
             tested_distributions,
             variable_names,
@@ -240,42 +229,20 @@ def create_statistics(
 
 def create_sensitivity_analysis(
     analysis: str,
-    disciplines: Collection[MDODiscipline],
-    parameter_space: ParameterSpace,
-    **options,
-) -> SensitivityAnalysis:
+    samples: IODataset | str | Path | None = None,
+) -> BaseSensitivityAnalysis:
     """Create the sensitivity analysis.
 
     Args:
         analysis: The name of a sensitivity analysis class.
-        disciplines: The disciplines.
-        parameter_space: A parameter space.
-        **options: The DOE algorithm options.
+        samples: The samples for the estimation of the sensitivity indices,
+            either as an :class:`.IODataset`
+            or as a pickle file path generated from
+            the :class:`.IODataset.to_pickle` method.
+            If ``None``, use :meth:`.compute_samples`.
 
     Returns:
-        The toolbox for these sensitivity indices.
-
-    Examples:
-        >>> from gemseo import create_discipline, create_parameter_space
-        >>> from gemseo.uncertainty import create_sensitivity_analysis
-        >>>
-        >>> expressions = {"y1": "x1+2*x2", "y2": "x1-3*x2"}
-        >>> discipline = create_discipline(
-        ...     "AnalyticDiscipline", expressions=expressions
-        ... )
-        >>>
-        >>> parameter_space = create_parameter_space()
-        >>> parameter_space.add_random_variable(
-        ...     "x1", "OTUniformDistribution", minimum=-1, maximum=1
-        ... )
-        >>> parameter_space.add_random_variable(
-        ...     "x2", "OTNormalDistribution", mu=0.5, sigma=2
-        ... )
-        >>>
-        >>> analysis = create_sensitivity_analysis(
-        ...     "CorrelationIndices", [discipline], parameter_space, n_samples=1000
-        ... )
-        >>> indices = analysis.compute_indices()
+        The sensitivity analysis.
     """
     from gemseo.uncertainty.sensitivity.factory import SensitivityAnalysisFactory
 
@@ -286,18 +253,4 @@ def create_sensitivity_analysis(
         name += "Analysis"
     name = name[0].upper() + name[1:]
 
-    return factory.create(name, disciplines, parameter_space, **options)
-
-
-def load_sensitivity_analysis(file_path: str | Path) -> SensitivityAnalysis:
-    """Load a sensitivity analysis from the disk.
-
-    Args:
-        file_path: The path to the file.
-
-    Returns:
-        The sensitivity analysis.
-    """
-    from gemseo.uncertainty.sensitivity.analysis import SensitivityAnalysis
-
-    return SensitivityAnalysis.from_pickle(file_path)
+    return factory.create(name, samples=samples)

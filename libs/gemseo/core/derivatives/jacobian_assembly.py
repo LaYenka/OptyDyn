@@ -49,8 +49,8 @@ from scipy.sparse.linalg import LinearOperator
 from scipy.sparse.linalg import factorized
 from strenum import StrEnum
 
+from gemseo.algos.linear_solvers.factory import LinearSolverLibraryFactory
 from gemseo.algos.linear_solvers.linear_problem import LinearProblem
-from gemseo.algos.linear_solvers.linear_solvers_factory import LinearSolversFactory
 from gemseo.core.derivatives import derivation_modes
 from gemseo.core.derivatives.jacobian_operator import JacobianOperator
 from gemseo.core.derivatives.mda_derivatives import traverse_add_diff_io_mda
@@ -63,10 +63,14 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from collections.abc import Mapping
 
-    from numpy.typing import NDArray
+    from typing_extensions import TypeAlias
 
     from gemseo.core.coupling_structure import MDOCouplingStructure
     from gemseo.core.discipline import MDODiscipline
+    from gemseo.typing import RealArray
+    from gemseo.typing import RealOrComplexArray
+    from gemseo.typing import RealOrComplexArrayT
+    from gemseo.typing import StrKeyMapping
 
 LOGGER = logging.getLogger(__name__)
 
@@ -83,8 +87,25 @@ def default_dict_factory() -> dict[Any, None]:
     return defaultdict(none_factory)
 
 
-class AssembledJacobianOperator(LinearOperator):
+# TODO: API: extract to a specific module
+class AssembledJacobianOperator(LinearOperator):  # type: ignore[misc] # because missing types
     """Representation of the assembled Jacobian as a SciPy ``LinearOperator``."""
+
+    __functions: Iterable[str]
+    """The names of functions to differentiate."""
+
+    __variables: Iterable[str]
+    """The names of variables with respect to which differentiate."""
+
+    __is_residual: bool
+    """Whether the functions are residuals."""
+
+    __get_jacobian_generator: Callable[
+        [Iterable[str], Iterable[str], bool],
+        Iterator[tuple[RealOrComplexArray, JacobianAssembly.JacobianPosition]],
+    ]
+    """The method to iterate over the relevant Jacobians, given the provided variables
+    and functions."""
 
     def __init__(
         self,
@@ -93,7 +114,8 @@ class AssembledJacobianOperator(LinearOperator):
         n_functions: int,
         n_variables: int,
         get_jacobian_generator: Callable[
-            [Iterable[str], Iterable[str], bool], Iterator
+            [Iterable[str], Iterable[str], bool],
+            Iterator[tuple[RealOrComplexArray, JacobianAssembly.JacobianPosition]],
         ],
         is_residual: bool = False,
     ) -> None:
@@ -114,7 +136,7 @@ class AssembledJacobianOperator(LinearOperator):
         self.__is_residual = is_residual
         self.__get_jacobian_generator = get_jacobian_generator
 
-    def _matvec(self, x: ndarray) -> ndarray:
+    def _matvec(self, x: RealOrComplexArrayT) -> RealOrComplexArrayT:
         """The matrix-vector product involving the Jacobian ∂f/∂v.
 
         Args:
@@ -135,7 +157,7 @@ class AssembledJacobianOperator(LinearOperator):
 
         return result
 
-    def _rmatvec(self, x: ndarray) -> ndarray:
+    def _rmatvec(self, x: RealOrComplexArrayT) -> RealOrComplexArrayT:
         """The matrix-vector product involving the transposed Jacobian ∂f/∂v.
 
         Args:
@@ -181,10 +203,10 @@ class JacobianAssembly:
     coupled_system: CoupledSystem
     """The coupled derivative system of residuals."""
 
-    __linear_solver_factory: LinearSolversFactory
+    __linear_solver_factory: LinearSolverLibraryFactory
     """The linear solver factory."""
 
-    DerivationMode = derivation_modes.DerivationMode
+    DerivationMode: TypeAlias = derivation_modes.DerivationMode
 
     N_CPUS: Final[int] = cpu_count()
     """The number of available CPUs."""
@@ -227,10 +249,10 @@ class JacobianAssembly:
         self.coupling_structure = coupling_structure
         self.sizes = {}
         self.disciplines = {}
-        self.__last_diff_inouts = ()
-        self.__minimal_couplings = []
+        self.__last_diff_inouts = (set(), set())
+        self.__minimal_couplings = set()
         self.coupled_system = CoupledSystem()
-        self.__linear_solver_factory = LinearSolversFactory(use_cache=True)
+        self.__linear_solver_factory = LinearSolverLibraryFactory(use_cache=True)
 
     def __check_inputs(
         self,
@@ -263,7 +285,7 @@ class JacobianAssembly:
             unknown_dvars -= inputs
 
         if unknown_dvars:
-            inputs = [
+            possible_inputs = [
                 disc.get_input_data_names()
                 for disc in self.coupling_structure.disciplines
             ]
@@ -272,7 +294,7 @@ class JacobianAssembly:
                 "inputs of the disciplines: "
                 f"{unknown_dvars}"
                 " possible inputs are: "
-                f"{inputs}"
+                f"{possible_inputs}"
             )
             raise ValueError(msg)
 
@@ -360,15 +382,14 @@ class JacobianAssembly:
                 msg = f"Failed to determine the size of input variable {variable}"
                 raise ValueError(msg)
 
-    # TODO: API: give a better name like get_derivation_mode for instance.
     @classmethod
-    def _check_mode(
+    def _get_derivation_mode(
         cls,
         mode: DerivationMode,
         n_variables: int,
         n_functions: int,
     ) -> DerivationMode:
-        """Check the differentiation mode.
+        """Get the differentiation mode.
 
         Args:
             mode: The differentiation mode.
@@ -400,7 +421,9 @@ class JacobianAssembly:
         functions: Iterable[str],
         variables: Iterable[str],
         is_residual: bool = False,
-    ) -> Iterator[tuple[ndarray | csr_matrix | JacobianOperator, JacobianPosition]]:
+    ) -> Iterator[
+        tuple[RealOrComplexArray | csr_matrix | JacobianOperator, JacobianPosition]
+    ]:
         """Iterate over Jacobian matrices.
 
         Provide a generator to iterate over the Jacobians associated with each provided
@@ -599,7 +622,7 @@ class JacobianAssembly:
 
     def total_derivatives(
         self,
-        in_data,
+        in_data: StrKeyMapping,
         functions: Collection[str],
         variables: Collection[str],
         couplings: Iterable[str],
@@ -611,7 +634,7 @@ class JacobianAssembly:
         execute: bool = True,
         residual_variables: Mapping[str, str] | None = None,
         **linear_solver_options: Any,
-    ) -> dict[str, dict[str, ndarray]] | dict[Any, dict[Any, None]]:
+    ) -> dict[str, dict[str, RealOrComplexArray]] | dict[Any, dict[Any, None]]:
         """Compute the Jacobian of total derivatives of the coupled system.
 
         Args:
@@ -671,11 +694,11 @@ class JacobianAssembly:
                 )
             )
 
-        couplings_minimal = sorted(couplings_minimal)
-        couplings_and_res = couplings_minimal.copy()
-        couplings_and_states = couplings_minimal.copy()
+        sorted_couplings_minimal = sorted(couplings_minimal)
+        couplings_and_res = sorted_couplings_minimal.copy()
+        couplings_and_states = sorted_couplings_minimal.copy()
         # linearize all the disciplines
-        if residual_variables is not None and residual_variables:
+        if residual_variables:
             couplings_and_res += residual_variables.keys()
             couplings_and_states += states
 
@@ -686,10 +709,12 @@ class JacobianAssembly:
             disc.linearize(in_data, execute=execute)
 
         # compute the sizes from the Jacobians
-        self.compute_sizes(functions, variables, couplings_minimal, residual_variables)
+        self.compute_sizes(
+            functions, variables, sorted_couplings_minimal, residual_variables
+        )
         n_variables = self.compute_dimension(variables)
         n_functions = self.compute_dimension(functions)
-        n_residuals = self.compute_dimension(couplings_minimal)
+        n_residuals = self.compute_dimension(sorted_couplings_minimal)
         if residual_variables:
             n_residuals += self.compute_dimension(residual_variables.keys())
         # compute the partial derivatives of the residuals
@@ -701,7 +726,7 @@ class JacobianAssembly:
             dfun_dx[fun] = self.assemble_jacobian([fun], variables)
             dfun_dy[fun] = self.assemble_jacobian([fun], couplings_and_res)
 
-        mode = self._check_mode(mode, n_variables, n_functions)
+        mode = self._get_derivation_mode(mode, n_variables, n_functions)
 
         # compute the total derivatives
         if mode == self.DerivationMode.DIRECT:
@@ -753,9 +778,9 @@ class JacobianAssembly:
 
     def split_jac(
         self,
-        coupled_system: Mapping[str, ndarray | dok_matrix],
+        coupled_system: Mapping[str, RealOrComplexArray | dok_matrix],
         variables: Iterable[str],
-    ) -> dict[str, ndarray | dok_matrix]:
+    ) -> dict[str, dict[str, RealOrComplexArray | dok_matrix]]:
         """Split a Jacobian dict into a dict of dict.
 
         Args:
@@ -806,14 +831,14 @@ class JacobianAssembly:
     # Newton step computation
     def compute_newton_step(
         self,
-        in_data: Mapping[str, NDArray[float]],
+        in_data: Mapping[str, RealArray],
         couplings: Collection[str],
         linear_solver: str = "DEFAULT",
         matrix_type: JacobianType = JacobianType.MATRIX,
-        residuals: ndarray | None = None,
+        residuals: RealOrComplexArray | None = None,
         resolved_residual_names: Collection[str] = (),
         **linear_solver_options: Any,
-    ) -> tuple[ndarray, bool]:
+    ) -> tuple[RealOrComplexArray, bool]:
         """Compute the Newton step for the coupled system of disciplines residuals.
 
         Args:
@@ -831,9 +856,7 @@ class JacobianAssembly:
             for which the order is given by the `couplings` argument.
             Whether the linear solver converged.
         """
-        residual_names = (
-            resolved_residual_names if resolved_residual_names else couplings
-        )
+        residual_names = resolved_residual_names or couplings
 
         self.compute_sizes(residual_names, couplings, couplings)
 
@@ -856,8 +879,8 @@ class JacobianAssembly:
         return linear_problem.solution, linear_problem.is_converged
 
     def residuals(
-        self, in_data: Mapping[str, Any], var_names: Iterable[str]
-    ) -> ndarray:
+        self, in_data: StrKeyMapping, var_names: Iterable[str]
+    ) -> RealOrComplexArray:
         """Form the matrix of residuals wrt coupling variables.
 
         Given disciplinary explicit calculations Yi(Y0_t,...Yn_t),
@@ -889,14 +912,13 @@ class JacobianAssembly:
 
         return concatenate(residuals)
 
-    # plot method
     def plot_dependency_jacobian(
         self,
         functions: Collection[str],
         variables: Collection[str],
         save: bool = True,
         show: bool = False,
-        filepath: str | None = None,
+        filepath: str = "",
         markersize: float | None = None,
     ) -> str:
         """Plot the Jacobian matrix.
@@ -909,16 +931,16 @@ class JacobianAssembly:
             show: Whether the plot is displayed.
             save: Whether the plot is saved in a PDF file.
             filepath: The file name to save to.
-                If ``None``, ``coupled_jacobian.pdf`` is used, otherwise
+                If empty, ``coupled_jacobian.pdf`` is used, otherwise
                 ``coupled_jacobian_ + filepath + .pdf``.
-            markersize: size of the markers
+            markersize: The size of the markers.
 
         Returns:
             The file name.
         """
         self.compute_sizes(functions, variables, [])
 
-        total_jac = None
+        total_jac = empty(0)
         # compute the positions of the outputs
         outputs_positions = {}
         current_position = 0
@@ -927,8 +949,7 @@ class JacobianAssembly:
             dfun_dx = self.assemble_jacobian([fun], variables)
             outputs_positions[fun] = current_position
             current_position += self.sizes[fun]
-
-            total_jac = dfun_dx if total_jac is None else vstack((total_jac, dfun_dx))
+            total_jac = vstack((total_jac, dfun_dx)) if len(total_jac) else dfun_dx
 
         # compute the positions of the inputs
         inputs_positions = {}
@@ -936,8 +957,6 @@ class JacobianAssembly:
         for variable in variables:
             inputs_positions[variable] = current_position
             current_position += self.sizes[variable]
-
-        # plot the (sparse) matrix
 
         fig = plt.figure(figsize=(6.0, 10.0))
         ax1 = fig.add_subplot(111)
@@ -950,12 +969,12 @@ class JacobianAssembly:
         )
 
         if save:
-            if filepath is None:
-                filename = "coupled_jacobian.pdf"
-            else:
+            if filepath:
                 filename = f"coupled_jacobian_{filepath}.pdf"
+            else:
+                filename = "coupled_jacobian.pdf"
         else:
-            filename = None
+            filename = ""
 
         save_show_figure(fig, show, filename)
         return filename
@@ -982,7 +1001,7 @@ class CoupledSystem:
     lu_fact: int
     """The number of LU mode calls (adjoint or direct)."""
 
-    __linear_solver_factory: LinearSolversFactory
+    __linear_solver_factory: LinearSolverLibraryFactory
     """The linear solver factory."""
 
     linear_problem: LinearProblem | None
@@ -996,7 +1015,7 @@ class CoupledSystem:
         self.n_direct_modes = 0
         self.n_adjoint_modes = 0
         self.lu_fact = 0
-        self.__linear_solver_factory = LinearSolversFactory(use_cache=True)
+        self.__linear_solver_factory = LinearSolverLibraryFactory(use_cache=True)
         self.linear_problem = None
 
     def direct_mode(
@@ -1058,7 +1077,7 @@ class CoupledSystem:
         linear_solver: str = DEFAULT_LINEAR_SOLVER,
         use_lu_fact: bool = False,
         **linear_solver_options: Any,
-    ) -> dict[str, ndarray]:
+    ) -> dict[str, RealArray]:
         """Compute the total derivative Jacobian in adjoint mode.
 
         Args:
@@ -1146,7 +1165,7 @@ class CoupledSystem:
         dfun_dy: Mapping[str, dok_matrix],
         linear_solver: str = DEFAULT_LINEAR_SOLVER,
         **linear_solver_options: Any,
-    ) -> dict[str, ndarray]:
+    ) -> dict[str, RealArray]:
         """Compute the total derivative Jacobian in adjoint mode.
 
         Args:
@@ -1251,7 +1270,7 @@ class CoupledSystem:
         dfun_dx: Mapping[str, dok_matrix],
         dfun_dy: Mapping[str, dok_matrix],
         tol: float = 1e-10,
-    ) -> dict[str, ndarray]:
+    ) -> dict[str, RealArray]:
         """Compute the total derivative Jacobian in adjoint mode.
 
         Args:

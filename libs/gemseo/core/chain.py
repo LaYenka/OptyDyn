@@ -25,11 +25,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from numpy import ndarray
 from strenum import LowercaseStrEnum
 from strenum import StrEnum
 
-from gemseo.core.coupling_structure import DependencyGraph
 from gemseo.core.coupling_structure import MDOCouplingStructure
+from gemseo.core.dependency_graph import DependencyGraph
 from gemseo.core.derivatives.chain_rule import traverse_add_diff_io
 from gemseo.core.derivatives.jacobian_operator import JacobianOperator
 from gemseo.core.discipline import MDODiscipline
@@ -48,8 +49,6 @@ from gemseo.utils.enumeration import merge_enums
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from collections.abc import Sequence
-
-    from numpy import ndarray
 
 
 # TODO: One class per module.
@@ -87,14 +86,14 @@ class MDOChain(MDODiscipline):
             grammar_type: The type of the input and output grammars.
         """  # noqa: D205, D212, D415
         super().__init__(name, grammar_type=grammar_type)
-        self._disciplines = disciplines
+        self._disciplines = list(disciplines)
         self.initialize_grammars()
         self._coupling_structure = None
         self._last_diff_inouts = None
 
     def set_disciplines_statuses(
         self,
-        status: str,
+        status: MDODiscipline.ExecutionStatus,
     ) -> None:
         """Set the sub-disciplines statuses.
 
@@ -111,7 +110,7 @@ class MDOChain(MDODiscipline):
         self.output_grammar.clear()
         for discipline in self.disciplines:
             self.input_grammar.update(
-                discipline.input_grammar, exclude_names=self.output_grammar.keys()
+                discipline.input_grammar, excluded_names=self.output_grammar.keys()
             )
             self.output_grammar.update(discipline.output_grammar)
 
@@ -160,8 +159,9 @@ class MDOChain(MDODiscipline):
 
                 # Make a copy of the keys because the dict is changed in the
                 # loop
-                existing_inputs = self.jac[output_name].keys()
-                common_inputs = set(existing_inputs) & set(discipline.jac)
+                common_inputs = sorted(
+                    set(self.jac[output_name].keys()).intersection(discipline.jac)
+                )
                 for input_name in common_inputs:
                     # Store reference to the current Jacobian
                     curr_jac = self.jac[output_name][input_name]
@@ -397,7 +397,8 @@ class MDOParallelChain(MDODiscipline):
             ]
 
         for value in self.local_data.values():
-            value.flags.writeable = False
+            if isinstance(value, ndarray):
+                value.flags.writeable = False
 
         return [self.local_data] * len(self._disciplines)
 

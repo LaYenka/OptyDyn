@@ -29,9 +29,9 @@ from PIL import Image
 
 from gemseo import execute_post
 from gemseo.algos.database import Database
+from gemseo.post.factory import OptPostProcessorFactory
 from gemseo.post.opt_post_processor import OptPostProcessor
 from gemseo.post.opt_post_processor import OptPostProcessorOptionType
-from gemseo.post.post_factory import PostFactory
 
 
 class Animation(OptPostProcessor):
@@ -55,7 +55,7 @@ class Animation(OptPostProcessor):
             **options: The options of the :class:`.Animation`.
         """
         self._update_grammar_from_class(
-            cls=PostFactory().get_class(
+            cls=OptPostProcessorFactory().get_class(
                 options.get(self.__OPT_POST_PROCESSOR, self.DEFAULT_OPT_POST_PROCESSOR)
             )
         )
@@ -132,7 +132,7 @@ class Animation(OptPostProcessor):
             The paths to the images at each time step of the animation.
         """
         steps_to_frame_file_paths = []
-        opt_problem = self.opt_problem
+        opt_problem = self.optimization_problem
         if temporary_database_file:
             temporary_database_file = Path(temporary_database_file)
             database = opt_problem.database
@@ -213,7 +213,7 @@ class Animation(OptPostProcessor):
         output_file_paths = []
         for file_path, frames in file_paths_to_frames.items():
             if first_iteration > 0:
-                first_iteration = first_iteration - 1
+                first_iteration -= 1
             frames = frames[first_iteration:] + frames[:first_iteration]
             frames[0].save(
                 file_path,

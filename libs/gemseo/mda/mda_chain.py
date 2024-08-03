@@ -34,17 +34,17 @@ from gemseo.core.chain import MDOChain
 from gemseo.core.chain import MDOParallelChain
 from gemseo.core.discipline import MDODiscipline
 from gemseo.core.execution_sequence import SerialExecSequence
+from gemseo.mda.base_mda import BaseMDA
 from gemseo.mda.initialization_chain import MDOInitializationChain
-from gemseo.mda.mda import MDA
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from collections.abc import Mapping
     from collections.abc import Sequence
-    from typing import Any
 
     from gemseo.core.coupling_structure import MDOCouplingStructure
     from gemseo.core.discipline_data import DisciplineData
+    from gemseo.typing import StrKeyMapping
     from gemseo.utils.matplotlib_figure import FigSizeType
 
 LOGGER = logging.getLogger(__name__)
@@ -52,13 +52,13 @@ LOGGER = logging.getLogger(__name__)
 N_CPUS = cpu_count()
 
 
-class MDAChain(MDA):
+class MDAChain(BaseMDA):
     """A chain of MDAs.
 
     The execution sequence is provided by the :class:`.DependencyGraph`.
     """
 
-    inner_mdas: list[MDA]
+    inner_mdas: list[BaseMDA]
     """The ordered MDAs."""
 
     __initialize_defaults: bool
@@ -69,7 +69,7 @@ class MDAChain(MDA):
         disciplines: Sequence[MDODiscipline],
         inner_mda_name: str = "MDAJacobi",
         max_mda_iter: int = 20,
-        name: str | None = None,
+        name: str = "",
         n_processes: int = N_CPUS,
         chain_linearize: bool = False,
         tolerance: float = 1e-6,
@@ -80,11 +80,11 @@ class MDAChain(MDA):
         sub_coupling_structures: Iterable[MDOCouplingStructure | None] | None = None,
         log_convergence: bool = False,
         linear_solver: str = "DEFAULT",
-        linear_solver_options: Mapping[str, Any] | None = None,
+        linear_solver_options: StrKeyMapping | None = None,
         mdachain_parallelize_tasks: bool = False,
         mdachain_parallel_options: Mapping[str, int | bool] | None = None,
         initialize_defaults: bool = False,
-        **inner_mda_options: float | int | bool | str | None,
+        **inner_mda_options: float | bool | str | None,
     ) -> None:
         """
         Args:
@@ -142,24 +142,19 @@ class MDAChain(MDA):
         self.__initialize_defaults = initialize_defaults
         self._initialize_grammars()
         self._check_consistency()
-        self._compute_input_couplings()
+        self._compute_input_coupling_names()
 
         # cascade the tolerance
         for mda in self.inner_mdas:
             mda.tolerance = self.tolerance
 
-    @property
-    def max_mda_iter(self) -> int:
-        """The maximum iterations number of each of the inner MDA algorithms."""
-        return super().max_mda_iter
-
-    @max_mda_iter.setter
+    @BaseMDA.max_mda_iter.setter
     def max_mda_iter(self, max_mda_iter: int) -> None:  # noqa: D102
         self._max_mda_iter = max_mda_iter
         for mda in self.inner_mdas:
             mda.max_mda_iter = max_mda_iter
 
-    @MDA.log_convergence.setter
+    @BaseMDA.log_convergence.setter
     def log_convergence(  # noqa: D102
         self,
         value: bool,
@@ -175,7 +170,7 @@ class MDAChain(MDA):
         sub_coupling_structures: Iterable[MDOCouplingStructure | None] | None = None,
         mdachain_parallelize_tasks: bool = False,
         mdachain_parallel_options: Mapping[str, int | bool] | None = None,
-        **inner_mda_options: float | int | bool | str | None,
+        **inner_mda_options: float | bool | str | None,
     ) -> None:
         """Create an MDO chain from the execution sequence of the disciplines.
 
@@ -228,12 +223,12 @@ class MDAChain(MDA):
         This method creates a process that will be appended to the main inner
         :class:`.MDOChain` of the :class:`.MDAChain`. Depending on the number and type
         of disciplines, as well as the options provided by the user, the process may be
-        a sole discipline, a :class:`.MDA`, a :class:`MDOChain`, or a
+        a sole discipline, a :class:`.BaseMDA`, a :class:`MDOChain`, or a
         :class:`MDOParallelChain`.
 
         Args:
             disciplines: The disciplines.
-            inner_mda_name: The inner :class:`.MDA` class name.
+            inner_mda_name: The inner :class:`.BaseMDA` class name.
             acceleration: The acceleration method to be used to improve the convergence
                 rate of the fixed point iteration method.
             over_relax_factor: The over-relaxation factor.
@@ -241,7 +236,7 @@ class MDAChain(MDA):
             mdachain_parallelize_tasks: Whether to parallelize the parallel tasks,
                 if any.
             mdachain_parallel_options: The :class:`MDOParallelChain` options.
-            inner_mda_options: The inner :class:`.MDA` options.
+            inner_mda_options: The inner :class:`.BaseMDA` options.
 
         Returns:
             A process.
@@ -265,24 +260,24 @@ class MDAChain(MDA):
         inner_mda_name: str,
         parallel_tasks: list[tuple[MDODiscipline]],
         inner_mda_options: Mapping[str, float | int | bool | str | None],
-    ) -> Sequence[MDODiscipline | MDA]:
+    ) -> Sequence[MDODiscipline | BaseMDA]:
         """Compute the parallel disciplines.
 
         This method computes the parallel disciplines,
         if any.
         If there is any coupled disciplines in a parallel task,
-        an :class:`.MDA` is created,
-        based on the :class:`.MDA` options provided.
+        a :class:`.BaseMDA` is created,
+        based on the :class:`.BaseMDA` options provided.
 
         Args:
             disciplines: The disciplines.
-            inner_mda_name: The inner :class:`.MDA` class name.
+            inner_mda_name: The inner :class:`.BaseMDA` class name.
             acceleration: The acceleration method to be used to improve the convergence
                 rate of the fixed point iteration method.
             over_relax_factor: The over-relaxation factor.
             parallel_tasks: The parallel tasks.
-            inner_mda_name: The inner :class:`.MDA` class name.
-            inner_mda_options: The inner :class:`.MDA` options.
+            inner_mda_name: The inner :class:`.BaseMDA` class name.
+            inner_mda_options: The inner :class:`.BaseMDA` options.
 
         Returns:
             The parallel disciplines.
@@ -341,20 +336,20 @@ class MDAChain(MDA):
         coupled_disciplines: Sequence[MDODiscipline],
         inner_mda_name: str,
         inner_mda_options: Mapping[str, float | int | bool | str | None],
-    ) -> MDA:
+    ) -> BaseMDA:
         """Create an inner MDA from the coupled disciplines and the MDA options.
 
         Args:
             disciplines: The disciplines.
             coupled_disciplines: The coupled disciplines.
-            inner_mda_name: The inner :class:`.MDA` class name.
-            inner_mda_options: The inner :class:`.MDA` options.
+            inner_mda_name: The inner :class:`.BaseMDA` class name.
+            inner_mda_options: The inner :class:`.BaseMDA` options.
             acceleration: The acceleration method to be used to improve the convergence
                 rate of the fixed point iteration method.
             over_relax_factor: The over-relaxation factor.
 
         Returns:
-            The :class:`.MDA` instance.
+            The :class:`.BaseMDA` instance.
         """
         inner_mda_disciplines = self.__get_coupled_disciplines_initial_order(
             coupled_disciplines, disciplines
@@ -393,7 +388,7 @@ class MDAChain(MDA):
         return (
             len(disciplines) == 1
             and self.coupling_structure.is_self_coupled(first_discipline)
-            and not isinstance(disciplines[0], MDA)
+            and not isinstance(disciplines[0], BaseMDA)
         )
 
     @staticmethod
@@ -477,11 +472,18 @@ class MDAChain(MDA):
         super()._check_consistency()
 
     def execute(  # noqa:D102
-        self, input_data: Mapping[str, Any] | None = None
+        self, input_data: StrKeyMapping | None = None
     ) -> DisciplineData:
-        if self.__initialize_defaults:
+        # The initialization is needed for MDA loops.
+        if (
+            self.__initialize_defaults
+            and len(self.disciplines) > 1
+            and len(self.strong_couplings) > 0
+        ):
             init_chain = MDOInitializationChain(
-                self.disciplines, available_data_names=input_data or ()
+                self.disciplines,
+                available_data_names=input_data or (),
+                grammar_type=self.grammar_type,
             )
             self.default_inputs.update(init_chain.execute(input_data))
             self.__initialize_defaults = False
@@ -517,7 +519,7 @@ class MDAChain(MDA):
         self,
         inputs: Iterable[str] | None = None,
     ) -> None:
-        MDA.add_differentiated_inputs(self, inputs)
+        BaseMDA.add_differentiated_inputs(self, inputs)
         if self._chain_linearize:
             self.mdo_chain.add_differentiated_inputs(inputs)
 
@@ -525,7 +527,7 @@ class MDAChain(MDA):
         self,
         outputs: Iterable[str] | None = None,
     ) -> None:
-        MDA.add_differentiated_outputs(self, outputs=outputs)
+        BaseMDA.add_differentiated_outputs(self, outputs=outputs)
         if self._chain_linearize:
             self.mdo_chain.add_differentiated_outputs(outputs)
 

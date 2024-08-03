@@ -78,7 +78,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from gemseo.datasets.dataset import Dataset
-    from gemseo.uncertainty.distributions.composed import ComposedDistribution
+    from gemseo.typing import StrKeyMapping
+    from gemseo.uncertainty.distributions.base_joint import BaseJointDistribution
 
 from numpy import array
 from numpy import ndarray
@@ -89,13 +90,13 @@ from gemseo.uncertainty.distributions.factory import DistributionFactory
 from gemseo.utils.data_conversion import concatenate_dict_of_arrays_to_array
 from gemseo.utils.data_conversion import split_array_to_dict_of_arrays
 
-RandomVariable = collections.namedtuple(
+RandomVariable = collections.namedtuple(  # noqa: PYI024
     "RandomVariable",
     ["distribution", "size", "parameters"],
     defaults=(1, {}),
 )
 
-RandomVector = collections.namedtuple(
+RandomVector = collections.namedtuple(  # noqa: PYI024
     "RandomVector",
     ["distribution", "size", "parameters"],
     defaults=(1, {}),
@@ -110,13 +111,13 @@ class ParameterSpace(DesignSpace):
     uncertain_variables: list[str]
     """The names of the uncertain variables."""
 
-    distributions: dict[str, ComposedDistribution]
+    distributions: dict[str, BaseJointDistribution]
     """The marginal probability distributions of the uncertain variables.
 
     These variables are defined as random vectors with independent components.
     """
 
-    distribution: ComposedDistribution
+    distribution: BaseJointDistribution
     """The joint probability distribution of the uncertain variables."""
 
     _INITIAL_DISTRIBUTION = "Initial distribution"
@@ -146,7 +147,7 @@ class ParameterSpace(DesignSpace):
         self.__uncertain_variables_to_definitions = {}
         self.__distribution_family_id = ""
 
-    def build_composed_distribution(self, copula: Any = None) -> None:
+    def build_joint_distribution(self, copula: Any = None) -> None:
         """Build the joint probability distribution.
 
         Args:
@@ -160,7 +161,7 @@ class ParameterSpace(DesignSpace):
                 for name in self.uncertain_variables
                 for marginal in self.distributions[name].marginals
             ]
-            self.distribution = distributions[0].COMPOSED_DISTRIBUTION_CLASS(
+            self.distribution = distributions[0].JOINT_DISTRIBUTION_CLASS(
                 distributions, copula
             )
 
@@ -207,7 +208,7 @@ class ParameterSpace(DesignSpace):
 
         Warnings:
             The probability distributions must have
-            the same :class:`~.Distribution.DISTRIBUTION_FAMILY_ID`.
+            the same :class:`~.BaseDistribution.DISTRIBUTION_FAMILY_ID`.
             For instance,
             one cannot mix a random vector
             using a :class:`.OTUniformDistribution` with identifier ``"OT"``
@@ -251,11 +252,6 @@ class ParameterSpace(DesignSpace):
                 are not consistent.
         """
         self._check_variable_name(name)
-        # TODO: API: remove this compatibility layer
-        # TODO: API: use interfaced_distribution_parameters only.
-        interfaced_distribution_parameters = self.__get_distribution_parameters(
-            interfaced_distribution_parameters, parameters
-        )
         distribution_class = DistributionFactory().get_class(distribution)
         parameters_as_tuple = isinstance(interfaced_distribution_parameters, tuple)
 
@@ -334,33 +330,28 @@ class ParameterSpace(DesignSpace):
             marginals.append(distribution_class(**kwargs))
 
         # Define the distribution of the random vector with a joint distribution.
-        composed_distribution_class = distribution_class.COMPOSED_DISTRIBUTION_CLASS
-        self.distributions[name] = composed_distribution_class(marginals)
+        joint_distribution_class = distribution_class.JOINT_DISTRIBUTION_CLASS
+        self.distributions[name] = joint_distribution_class(marginals)
 
         # Update the uncertain variables.
         self.uncertain_variables.append(name)
 
         # Update the full joint distribution,
         # i.e. the joint distribution of all the uncertain variables.
-        self.build_composed_distribution()
+        self.build_joint_distribution()
 
         # Update the parameter space as subclass of a DesignSpace.
         l_b = self.distributions[name].math_lower_bound
         u_b = self.distributions[name].math_upper_bound
         value = self.distributions[name].mean
-        if name in self.variable_names:
-            self.set_lower_bound(name, l_b)
-            self.set_upper_bound(name, u_b)
-            self.set_current_variable(name, value)
-        else:
-            self.add_variable(
-                name,
-                self.distributions[name].dimension,
-                self.DesignVariableType.FLOAT,
-                l_b,
-                u_b,
-                value,
-            )
+        self.add_variable(
+            name,
+            self.distributions[name].dimension,
+            self.DesignVariableType.FLOAT,
+            l_b,
+            u_b,
+            value,
+        )
 
     @staticmethod
     def __get_random_vector_parameter_value(size: int, value: list[Any]) -> list[Any]:
@@ -448,7 +439,7 @@ class ParameterSpace(DesignSpace):
         distribution: str,
         size: int = 1,
         interfaced_distribution: str = "",
-        interfaced_distribution_parameters: tuple[Any] | Mapping[str, Any] = (),
+        interfaced_distribution_parameters: tuple[Any] | StrKeyMapping = (),
         **parameters: Any,
     ) -> None:
         """Add a random variable from a probability distribution.
@@ -477,18 +468,13 @@ class ParameterSpace(DesignSpace):
 
         Warnings:
             The probability distributions must have
-            the same :class:`~.Distribution.DISTRIBUTION_FAMILY_ID`.
+            the same :class:`~.BaseDistribution.DISTRIBUTION_FAMILY_ID`.
             For instance,
             one cannot mix a random variable
             distributed as an :class:`.OTUniformDistribution` with identifier ``"OT"``
             and a random variable
             distributed as a :class:`.SPNormalDistribution` with identifier ``"SP"``.
         """
-        # TODO: API: remove this compatibility layer
-        # TODO: API: use interfaced_distribution_parameters only.
-        interfaced_distribution_parameters = self.__get_distribution_parameters(
-            interfaced_distribution_parameters, parameters
-        )
         kwargs = {k: [v] for k, v in parameters.items()}
         if interfaced_distribution:
             kwargs["interfaced_distribution"] = interfaced_distribution
@@ -511,39 +497,6 @@ class ParameterSpace(DesignSpace):
             size,
             **kwargs,
         )
-
-    @staticmethod
-    def __get_distribution_parameters(
-        interfaced_distribution_parameters: tuple[Any]
-        | Mapping[str, Any]
-        | list[tuple[Any]]
-        | tuple[Mapping[str, Any]],
-        parameters: Any | list[Any],
-    ) -> tuple[Any] | Mapping[str, Any] | list[tuple[Any]] | tuple[Mapping[str, Any]]:
-        """Return the parameters of the interfaced distribution.
-
-        Args:
-            interfaced_distribution_parameters: The parameters
-                of the interfaced distribution.
-            parameters: The parameters of the distribution.
-
-        Returns:
-            The parameters of the interfaced distribution.
-        """
-        if "parameters" in parameters:
-            if interfaced_distribution_parameters:
-                msg = (
-                    "'interfaced_distribution_parameters' "
-                    "is the new name of 'parameters' "
-                    "which will be removed in the next major release; "
-                    "you cannot use both names at the same time; "
-                    "please use 'interfaced_distribution_parameters'."
-                )
-                raise ValueError(msg)
-
-            return parameters.pop("parameters")
-
-        return interfaced_distribution_parameters
 
     def get_range(
         self,
@@ -586,7 +539,7 @@ class ParameterSpace(DesignSpace):
             del self.distributions[name]
             self.uncertain_variables.remove(name)
             if self.uncertain_variables:
-                self.build_composed_distribution()
+                self.build_joint_distribution()
         super().remove_variable(name)
 
     def compute_samples(
@@ -638,21 +591,18 @@ class ParameterSpace(DesignSpace):
         """
         if inverse:
             self.__check_dict_of_array(value)
+
+        method_name = "compute_inverse_cdf" if inverse else "compute_cdf"
         values = {}
         for name in self.uncertain_variables:
-            val = value[name]
-            distribution = self.distributions[name]
-            if val.ndim == 1:
-                if inverse:
-                    current_v = distribution.compute_inverse_cdf(val)
-                else:
-                    current_v = distribution.compute_cdf(val)
-            elif inverse:
-                current_v = [distribution.compute_inverse_cdf(sample) for sample in val]
+            input_samples = value[name]
+            compute = getattr(self.distributions[name], method_name)
+            if input_samples.ndim == 1:
+                output_samples = compute(input_samples)
             else:
-                current_v = [distribution.compute_cdf(sample) for sample in val]
+                output_samples = list(map(compute, input_samples))
 
-            values[name] = array(current_v)
+            values[name] = array(output_samples)
 
         return values
 
@@ -735,7 +685,7 @@ class ParameterSpace(DesignSpace):
             )
             add_transformation = False
             for transformation in transformations:
-                if transformation not in [default_variable_name, self._BLANK]:
+                if transformation not in {default_variable_name, self._BLANK}:
                     add_transformation = True
                     break
 
@@ -1034,7 +984,7 @@ class ParameterSpace(DesignSpace):
                 else:
                     parameter_space.add_variable(name, size, "float", l_b, u_b, value)
 
-        parameter_space.build_composed_distribution(copula)
+        parameter_space.build_joint_distribution(copula)
         return parameter_space
 
     def to_design_space(self) -> DesignSpace:

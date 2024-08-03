@@ -41,9 +41,9 @@ from gemseo.core.grammars.pydantic_ndarray import NDArrayPydantic
 from gemseo.core.grammars.pydantic_ndarray import _NDArrayPydantic
 
 if TYPE_CHECKING:
-    from gemseo.core.discipline_data import Data
     from gemseo.core.grammars.base_grammar import SimpleGrammarTypes
     from gemseo.core.grammars.json_schema import Schema
+    from gemseo.typing import StrKeyMapping
     from gemseo.utils.string_tools import MultiLineString
 
 
@@ -189,7 +189,7 @@ class PydanticGrammar(BaseGrammar):
         # The sole purpose of the following attribute is to identify a model created
         # here,
         # and not from an external class deriving from BaseModel,
-        self.__model.__internal__ = None  # type: ignore
+        self.__model.__internal__ = None  # type: ignore[attr-defined]
         # This is another workaround for pickling a created model.
         self.__model.__pydantic_parent_namespace__ = {}
 
@@ -198,13 +198,14 @@ class PydanticGrammar(BaseGrammar):
 
     def _validate(  # noqa: D102
         self,
-        data: Data,
+        data: StrKeyMapping,
         error_message: MultiLineString,
     ) -> bool:
         self.__rebuild_model()
         try:
-            # The grammars shall be strict on typing and not coerce the data.
-            self.__model.model_validate(data, strict=True)
+            # The grammars shall be strict on typing and not coerce the data,
+            # pydantic requires a dict, using a mapping fails.
+            self.__model.model_validate(dict(data), strict=True)
         except ValidationError as errors:
             for line in str(errors).split("\n"):
                 error_message.add(line)

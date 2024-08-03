@@ -74,9 +74,9 @@ class Correlations(OptPostProcessor):
         Raises:
             ValueError: If an element of `func_names` is unknown.
         """  # noqa: D205, D212, D415
-        problem = self.opt_problem
+        problem = self.optimization_problem
 
-        all_func_names = [func.name for func in problem.get_all_functions()]
+        all_func_names = [func.name for func in problem.functions]
         if not func_names:
             func_names = all_func_names
 
